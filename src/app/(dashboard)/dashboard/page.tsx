@@ -7,6 +7,7 @@ import { StrategySnapshot } from "@/components/dashboard/StrategySnapshot";
 import { DeadlineWidget } from "@/components/dashboard/DeadlineWidget";
 import { ActionFeed } from "@/components/dashboard/ActionFeed";
 import { WhatChanged } from "@/components/dashboard/WhatChanged";
+import { ThisWeekendWidget } from "@/components/dashboard/ThisWeekendWidget";
 import { SkeletonList } from "@/components/ui/Skeleton";
 import { apiClient } from "@/lib/api/client";
 
@@ -186,6 +187,11 @@ export default function DashboardPage() {
 
       {/* Concierge chat — Mitch April 30 review #2: chat as a core dashboard feature. */}
       <ConciergeChatCard userName={data.userName} />
+
+      {/* "What can I hunt this weekend?" — activation widget that surfaces
+         OTC + open-season opportunities near the user's home state. Self-
+         hides when there's nothing to show. */}
+      <ThisWeekendWidget />
 
       {/* What Changed */}
       <WhatChanged />
