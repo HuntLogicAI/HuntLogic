@@ -62,8 +62,9 @@ export function canonicalizeText(text: string): string {
       .replace(/\r\n/g, "\n")
       .replace(/[ \t]+/g, " ")
       .replace(/\n{3,}/g, "\n\n")
-      // Drop common per-page headers/footers (e.g. "Page 12 of 47")
-      .replace(/^\s*Page\s+\d+\s+of\s+\d+\s*$/gim, "")
+      // Drop common per-page headers/footers (e.g. "Page 12 of 47"), incl.
+      // the trailing newline so we don't leave a blank line behind.
+      .replace(/^\s*Page\s+\d+\s+of\s+\d+\s*\n?/gim, "")
       // Drop "Last updated YYYY-MM-DD" stamps
       .replace(/Last\s+updated:?\s+\d{4}-\d{2}-\d{2}/gi, "")
       // Drop printed-on timestamps
