@@ -363,14 +363,36 @@ function buildFallbackExplanation(
       `With a ${(hunt.latestDrawRate * 100).toFixed(0)}% draw rate, ${hunt.stateCode} ${hunt.speciesName} in ${hunt.unitCode ?? "this area"} offers reasonable odds for this year's application cycle.`
     );
   } else if (hunt.recType === "build_points") {
-    parts.push(
-      `${hunt.stateCode} ${hunt.speciesName} is a point-building opportunity. Continue accumulating points toward the ${hunt.latestMinPoints ?? "required"}-point threshold.`
-    );
+    // Bug fix: when latestMinPoints is 0 or unknown the original copy read
+    // "...toward the 0-point threshold" — incoherent (a 0-point threshold
+    // means you're already eligible). Fall back to qualitative wording.
+    const minPts = hunt.latestMinPoints;
+    if (typeof minPts === "number" && minPts > 0) {
+      parts.push(
+        `${hunt.stateCode} ${hunt.speciesName} is a point-building opportunity. Continue accumulating points toward the ${minPts}-point threshold.`
+      );
+    } else {
+      parts.push(
+        `${hunt.stateCode} ${hunt.speciesName} is a point-building opportunity — historical draw-out points haven't been recorded yet, so the safest play is to keep banking points while we collect more data.`
+      );
+    }
   }
 
-  if (hunt.latestSuccessRate !== null) {
+  // Bug fix: the original copy said "solid hunting opportunity" regardless
+  // of the actual success rate, including 0%. Make the qualifier match the
+  // number.
+  if (hunt.latestSuccessRate !== null && hunt.latestSuccessRate > 0) {
+    const rate = Math.round(hunt.latestSuccessRate * 100);
+    const qualifier =
+      rate >= 60
+        ? "very strong"
+        : rate >= 40
+          ? "solid"
+          : rate >= 20
+            ? "modest"
+            : "below-average";
     parts.push(
-      `Historical success rates of ${(hunt.latestSuccessRate * 100).toFixed(0)}% suggest solid hunting opportunity.`
+      `Historical success rate of ${rate}% — a ${qualifier} hunting opportunity.`
     );
   }
 

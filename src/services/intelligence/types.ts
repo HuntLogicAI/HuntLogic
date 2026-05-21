@@ -46,6 +46,13 @@ export interface CostEstimate {
   travel: number;
   gear: number;
   total: number;
+  /**
+   * True when the cost was computed using state-specific fee data; false
+   * (or undefined for legacy rows) when it fell back to the default
+   * COST_CONFIG values. Lets the UI label the figure as an estimate vs.
+   * a precise quote and tells ops which states still need fee seeding.
+   */
+  isExact?: boolean;
 }
 
 export interface TimelineEstimate {

@@ -9,7 +9,12 @@ interface CostBreakdownProps {
   className?: string;
 }
 
-const categoryLabels: Record<keyof Omit<CostEstimate, "total">, { label: string; color: string }> = {
+// Only the numeric category fields participate in the breakdown chart.
+// `total` is shown separately and `isExact` is a metadata flag, not a
+// dollar value.
+type CostCategoryKey = "tag" | "license" | "points" | "travel" | "gear";
+
+const categoryLabels: Record<CostCategoryKey, { label: string; color: string }> = {
   tag: { label: "Tag/Permit", color: "bg-brand-forest" },
   license: { label: "License", color: "bg-brand-sage" },
   points: { label: "Points", color: "bg-brand-sky" },
@@ -22,7 +27,7 @@ export function CostBreakdown({
   comparisonNote,
   className,
 }: CostBreakdownProps) {
-  const entries = (Object.keys(categoryLabels) as Array<keyof Omit<CostEstimate, "total">>)
+  const entries = (Object.keys(categoryLabels) as CostCategoryKey[])
     .map((key) => ({
       key,
       ...categoryLabels[key],

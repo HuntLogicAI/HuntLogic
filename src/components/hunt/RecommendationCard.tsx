@@ -122,7 +122,12 @@ export function RecommendationCard({
       icon: TrendingUp,
     },
     {
-      label: "Est. Cost",
+      // Label as "Est. Cost" when fee data came from state-specific
+      // tables; "Cost (est.)" when we had to fall back to defaults
+      // (signals to the user that this is a rough planning number, not
+      // a quote — fixes the prod bug where every card showed an
+      // identical $1,820 fallback).
+      label: costEstimate.isExact ? "Est. Cost" : "Cost (est.)",
       value: formatCurrency(costEstimate.total),
       icon: DollarSign,
     },
