@@ -27,10 +27,44 @@ export async function GET(request: NextRequest) {
 
     const profile = await getProfile(userId);
 
+    // ── Derived counters ───────────────────────────────────────────────────
+    // The profile page surfaces three quick-stat tiles (States Active,
+    // Species, Total Points). Previously they all read uninitialized fields
+    // on the API response and fell back to 0 / array.length. Compute them
+    // server-side so every consumer (dashboard, profile page, future
+    // widgets) gets consistent values.
+    const stateInterestPrefs = profile.preferences.filter(
+      (p) => p.category === "state_interest" && p.value !== false,
+    );
+    const speciesInterestPrefs = profile.preferences.filter(
+      (p) => p.category === "species_interest" && p.value !== false,
+    );
+    const pointHoldingStates = new Set(
+      profile.pointHoldings.map((h) => h.stateCode),
+    );
+    const stateInterestStates = new Set(stateInterestPrefs.map((p) => p.key));
+    const statesActive = new Set([
+      ...pointHoldingStates,
+      ...stateInterestStates,
+    ]).size;
+    const speciesTracked = speciesInterestPrefs.length;
+    const totalPoints = profile.pointHoldings.reduce(
+      (sum, h) => sum + (h.points ?? 0),
+      0,
+    );
+
     return NextResponse.json({
-      data: profile,
+      data: {
+        ...profile,
+        statesActive,
+        speciesTracked,
+        totalPoints,
+      },
       meta: {
         completeness: profile.completeness,
+        statesActive,
+        speciesTracked,
+        totalPoints,
       },
     });
   } catch (error) {
