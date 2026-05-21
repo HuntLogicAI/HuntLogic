@@ -10,7 +10,6 @@ import {
   ChevronRight,
   Settings,
   Edit3,
-  Compass,
   AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -26,14 +25,10 @@ interface ProfileData {
   onboardingComplete: boolean;
 }
 
+// "Edit Hunt Profile" is intentionally NOT in this list — it has its own
+// prominent CTA card above the stats. Including it here too produced a
+// duplicate row directly underneath.
 const settingsLinks = [
-  {
-    href: "/profile/preferences",
-    label: "Edit Hunt Profile",
-    icon: Compass,
-    description:
-      "Update species, states, budget, travel, timeline, weapons, and hunt style",
-  },
   {
     href: "/profile/points",
     label: "Manage Points",

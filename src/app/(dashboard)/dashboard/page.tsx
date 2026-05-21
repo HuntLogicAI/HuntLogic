@@ -61,13 +61,20 @@ export default function DashboardPage() {
           const diff = new Date(d.date).getTime() - now;
           return diff > 0 && diff < sevenDays;
         })
-        .map((d) => ({
-          id: `alert-${d.id}`,
-          type: "urgent" as const,
-          message: `${d.stateCode} ${d.title} — deadline in ${Math.ceil((new Date(d.date).getTime() - now) / (24 * 60 * 60 * 1000))} days`,
-          ctaLabel: "View",
-          ctaHref: "/calendar",
-        }));
+        .map((d) => {
+          // Deadline titles already begin with the state code (e.g. "WY Elk
+          // Nonresident Draw Results"), so only prepend the state code when
+          // it's missing — avoids "WY WY ..." double-prefix.
+          const titleHasState = d.stateCode && d.title.startsWith(`${d.stateCode} `);
+          const displayTitle = titleHasState ? d.title : `${d.stateCode} ${d.title}`.trim();
+          return {
+            id: `alert-${d.id}`,
+            type: "urgent" as const,
+            message: `${displayTitle} — deadline in ${Math.ceil((new Date(d.date).getTime() - now) / (24 * 60 * 60 * 1000))} days`,
+            ctaLabel: "View",
+            ctaHref: "/calendar",
+          };
+        });
 
       // Map actions to component shape
       const priorityMap: Record<string, "urgent" | "high" | "medium" | "low"> = {

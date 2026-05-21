@@ -177,7 +177,15 @@ export function ConciergeChatCard({
         ))}
       </div>
 
-      {/* Input */}
+      {/* Input
+         *
+         * Form-level onSubmit covers native Enter-to-submit, but during prod
+         * UX testing the form submission silently dropped some keystrokes
+         * (likely a focus/timing issue with the suggested-prompt buttons that
+         * unmount when messages.length === 0). Adding an explicit onKeyDown
+         * fallback on the input guarantees Enter always sends a non-empty
+         * trimmed message regardless of focus state.
+         */}
       <form
         className="mt-3 flex items-center gap-2"
         onSubmit={(e) => {
@@ -189,6 +197,12 @@ export function ConciergeChatCard({
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send(input);
+            }
+          }}
           placeholder="Ask about points, units, deadlines…"
           className="min-h-[40px] flex-1 rounded-lg border border-brand-sage/20 bg-white px-3 py-2 text-sm text-brand-bark placeholder:text-brand-sage/60 focus:border-brand-forest focus:outline-none focus:ring-1 focus:ring-brand-forest/30 dark:border-brand-sage/30 dark:bg-brand-bark/40 dark:text-brand-cream"
           disabled={isLoading}
