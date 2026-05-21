@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { PlaybookView } from "@/components/hunt/PlaybookView";
 import { SkeletonList } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { BookOpen } from "lucide-react";
+import { BookOpen, Pencil } from "lucide-react";
 import type { PlaybookData } from "@/services/intelligence/types";
 import { fetchWithCache, invalidateCache } from "@/lib/api/cache";
 
@@ -31,6 +32,28 @@ const CATEGORY_LABELS: Record<string, string> = {
   location: "home state",
   land_access: "land access",
 };
+
+function PlaybookHeader() {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div>
+        <h1 className="text-2xl font-bold text-brand-bark dark:text-brand-cream">
+          Playbook
+        </h1>
+        <p className="mt-1 text-sm text-brand-sage">
+          Your personalized multi-year hunting strategy
+        </p>
+      </div>
+      <Link
+        href="/profile/preferences"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-brand-sage/20 bg-white px-3 py-2 text-sm font-medium text-brand-sage hover:bg-brand-sage/5 hover:text-brand-forest transition-colors dark:bg-brand-bark dark:border-brand-sage/30 dark:hover:bg-brand-sage/10"
+      >
+        <Pencil className="h-4 w-4" />
+        Edit Profile
+      </Link>
+    </div>
+  );
+}
 
 export default function PlaybookPage() {
   const [playbook, setPlaybook] = useState<PlaybookData | null>(null);
@@ -83,7 +106,8 @@ export default function PlaybookPage() {
         setPlaybook(data.playbook ?? null);
         invalidateCache("/api/v1/playbook");
       } else {
-        setError(data.message || data.error || "Failed to generate playbook");
+        const baseMsg = data.message || data.error || "Failed to generate playbook";
+        setError(data.detail ? `${baseMsg}: ${data.detail}` : baseMsg);
       }
     } catch (err) {
       console.error("[playbook] Failed to refresh:", err);
@@ -114,14 +138,7 @@ export default function PlaybookPage() {
   if (!playbook && profile && !profileComplete) {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-brand-bark dark:text-brand-cream">
-            Playbook
-          </h1>
-          <p className="mt-1 text-sm text-brand-sage">
-            Your personalized multi-year hunting strategy
-          </p>
-        </div>
+        <PlaybookHeader />
         <EmptyState
           icon={<BookOpen className="h-8 w-8" />}
           title="We need a little more profile data first"
@@ -135,14 +152,7 @@ export default function PlaybookPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-brand-bark dark:text-brand-cream">
-          Playbook
-        </h1>
-        <p className="mt-1 text-sm text-brand-sage">
-          Your personalized multi-year hunting strategy
-        </p>
-      </div>
+      <PlaybookHeader />
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400">

@@ -105,7 +105,8 @@ export async function POST(request: NextRequest) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    console.error(`${LOG_PREFIX} POST error:`, message);
+    const stack = error instanceof Error ? error.stack : undefined;
+    console.error(`${LOG_PREFIX} POST error:`, message, stack);
 
     // Distinguish between validation errors and server errors
     if (
@@ -119,7 +120,10 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(
-      { error: "Failed to generate playbook" },
+      {
+        error: "Failed to generate playbook",
+        detail: message,
+      },
       { status: 500 }
     );
   }
