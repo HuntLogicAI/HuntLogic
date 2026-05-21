@@ -2,18 +2,27 @@
 
 import { memo, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { User } from "lucide-react";
+import { User, ExternalLink } from "lucide-react";
+
+export interface ChatSource {
+  name: string;
+  url: string | null;
+  kind?: "agency" | "regulation_doc" | "snapshot";
+}
 
 interface ChatMessageProps {
   role: "user" | "assistant";
   content: string;
   isStreaming?: boolean;
+  /** Source citations to render below the assistant's reply, if any. */
+  sources?: ChatSource[];
 }
 
 export const ChatMessage = memo(function ChatMessage({
   role,
   content,
   isStreaming,
+  sources,
 }: ChatMessageProps) {
   const isUser = role === "user";
 
@@ -54,12 +63,65 @@ export const ChatMessage = memo(function ChatMessage({
         ) : (
           <div className="space-y-3">
             {renderAssistantContent(content, isStreaming)}
+            {/* Inline citations — agency URLs + regulation snapshots that
+               were attached to the response payload. Only render after
+               streaming so the chips don't flicker in mid-stream. */}
+            {!isStreaming && sources && sources.length > 0 && (
+              <SourcesRow sources={sources} />
+            )}
           </div>
         )}
       </div>
     </div>
   );
 });
+
+function SourcesRow({ sources }: { sources: ChatSource[] }) {
+  return (
+    <div className="border-t border-brand-sage/15 pt-2 dark:border-brand-sage/25">
+      <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-brand-sage">
+        Sources
+      </p>
+      <ul className="flex flex-wrap gap-1.5">
+        {sources.map((src, i) => {
+          const inner = (
+            <span className="flex items-center gap-1 text-[11px]">
+              <span className="rounded-sm bg-brand-sage/10 px-1 py-0.5 font-mono text-[9px] text-brand-sage">
+                [{i + 1}]
+              </span>
+              <span className="line-clamp-1 max-w-[180px]">{src.name}</span>
+              {src.url && (
+                <ExternalLink className="h-2.5 w-2.5 text-brand-sage" />
+              )}
+            </span>
+          );
+          if (src.url) {
+            return (
+              <li key={`${src.name}-${i}`}>
+                <a
+                  href={src.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center rounded-md border border-brand-sage/20 bg-white/60 px-2 py-0.5 transition-colors hover:border-brand-forest/30 hover:bg-brand-forest/5 dark:bg-brand-bark/40 dark:hover:bg-brand-forest/10"
+                >
+                  {inner}
+                </a>
+              </li>
+            );
+          }
+          return (
+            <li
+              key={`${src.name}-${i}`}
+              className="inline-flex items-center rounded-md border border-brand-sage/15 bg-brand-sage/5 px-2 py-0.5 text-brand-sage"
+            >
+              {inner}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
 
 function renderAssistantContent(
   content: string,

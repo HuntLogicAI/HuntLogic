@@ -19,6 +19,7 @@ import {
   states,
   species,
   huntUnits,
+  stateRegulations,
 } from "@/lib/db/schema";
 import { config } from "@/lib/config";
 import { assembleContext } from "@/lib/ai/rag";
@@ -50,7 +51,8 @@ Behavior rules:
 - When the hunter asks for best zones, units, or application strategy, give a ranked or tiered answer with tradeoffs.
 - Separate official state-agency facts from hunter-consensus nuance. Label hunter-consensus guidance clearly.
 - Use specific numbers only when they are present in the grounded context. Never invent draw odds or tag counts.
-- If confidence is limited, say exactly what is uncertain.`;
+- If confidence is limited, say exactly what is uncertain.
+- When the message includes an "Authoritative sources" block, cite the most relevant entries inline using their bracket numbers (e.g. "[1]") immediately after the claim they support. Do NOT add a long "Sources" footer of your own — the UI renders the structured list separately. Only cite sources that were actually provided; do not invent citation numbers.`;
 
 let stateReferenceCache:
   | { id: string; code: string; name: string }[]
@@ -106,13 +108,33 @@ export async function POST(request: NextRequest) {
 
   const groundingContext = await buildGroundingContext(trimmedMessage);
 
-  // Assemble full message: profile context + grounding + conversation history + current message
+  // Detect state + species so we can return clickable source links alongside
+  // the answer. The same detection function is called inside
+  // buildGroundingContext, but it's cheap enough to call again here and keeps
+  // the source-collection contract narrow + testable.
+  const detected = await detectStateAndSpecies(trimmedMessage);
+  const sources = await collectSources({
+    stateId: detected.stateId,
+    speciesId: detected.speciesId,
+  });
+
+  // Assemble full message: profile context + grounding + sources + history + question.
+  // Sources are inlined as well so the model can cite them in-line; the
+  // structured `sources` array travels back in the response for the UI.
   const messageParts: string[] = [];
   if (profileContext) {
     messageParts.push(profileContext);
   }
   if (groundingContext) {
     messageParts.push(groundingContext);
+  }
+  if (sources.length > 0) {
+    const sourcesBlock = sources
+      .map((s, i) => `[${i + 1}] ${s.name}${s.url ? ` — ${s.url}` : ""}`)
+      .join("\n");
+    messageParts.push(
+      `Authoritative sources (cite by [n] when you use them in the answer):\n${sourcesBlock}`,
+    );
   }
   if (contextLines) {
     messageParts.push(`Previous conversation:\n${contextLines}`);
@@ -124,7 +146,7 @@ export async function POST(request: NextRequest) {
   // Try OpenClaw gateway first, then fall back to Anthropic, Gemini, and OpenAI
   try {
     const reply = await callOpenClawGateway(fullMessage);
-    return NextResponse.json({ text: reply });
+    return NextResponse.json({ text: reply, sources });
   } catch (gatewayErr) {
     console.warn(
       "[chat] OpenClaw gateway unavailable, trying direct providers:",
@@ -133,7 +155,7 @@ export async function POST(request: NextRequest) {
 
     try {
       const reply = await callAnthropicDirect(fullMessage);
-      return NextResponse.json({ text: reply });
+      return NextResponse.json({ text: reply, sources });
     } catch (anthropicErr) {
       console.warn(
         "[chat] Anthropic unavailable, trying Gemini:",
@@ -142,7 +164,7 @@ export async function POST(request: NextRequest) {
 
       try {
         const reply = await callGeminiDirect(fullMessage);
-        return NextResponse.json({ text: reply });
+        return NextResponse.json({ text: reply, sources });
       } catch (geminiErr) {
         console.warn(
           "[chat] Gemini unavailable, trying OpenAI:",
@@ -151,7 +173,7 @@ export async function POST(request: NextRequest) {
 
         try {
           const reply = await callOpenAIDirect(fullMessage);
-          return NextResponse.json({ text: reply });
+          return NextResponse.json({ text: reply, sources });
         } catch (openaiErr) {
           console.error("[chat] All backends failed:", openaiErr);
           return NextResponse.json(
@@ -162,6 +184,94 @@ export async function POST(request: NextRequest) {
       }
     }
   }
+}
+
+// =============================================================================
+// Source collection — collects citation candidates from authoritative tables
+// (state agency URL, state regulation docs, regulation snapshots) keyed off
+// the state/species detected in the user's message.
+// =============================================================================
+
+interface ChatSource {
+  /** Short human-readable label, e.g. "Colorado Parks & Wildlife" */
+  name: string;
+  /** Canonical URL — null for sources we know the name of but not a URL */
+  url: string | null;
+  /** Where it came from: lets the UI render different chip styles */
+  kind: "agency" | "regulation_doc" | "snapshot";
+}
+
+async function collectSources(opts: {
+  stateId: string | null;
+  speciesId: string | null;
+}): Promise<ChatSource[]> {
+  if (!opts.stateId) return [];
+
+  const results: ChatSource[] = [];
+
+  // 1) State agency homepage from `states.agencyName` + `states.agencyUrl`.
+  try {
+    const [state] = await db
+      .select({
+        name: states.name,
+        agencyName: states.agencyName,
+        agencyUrl: states.agencyUrl,
+      })
+      .from(states)
+      .where(eq(states.id, opts.stateId))
+      .limit(1);
+    if (state && state.agencyUrl) {
+      results.push({
+        name: state.agencyName ?? `${state.name} Wildlife Agency`,
+        url: state.agencyUrl,
+        kind: "agency",
+      });
+    }
+  } catch (err) {
+    console.warn("[chat:sources] agency lookup failed:", err);
+  }
+
+  // 2) Up to two regulation docs (hunt planner / big game regs) for this state.
+  try {
+    const docs = await db
+      .select({
+        title: stateRegulations.title,
+        url: stateRegulations.url,
+      })
+      .from(stateRegulations)
+      .where(
+        and(
+          eq(stateRegulations.stateId, opts.stateId),
+          eq(stateRegulations.enabled, true),
+        ),
+      )
+      .limit(3);
+    for (const doc of docs) {
+      if (!doc.url) continue;
+      results.push({
+        name: doc.title,
+        url: doc.url,
+        kind: "regulation_doc",
+      });
+    }
+  } catch (err) {
+    console.warn("[chat:sources] regulation lookup failed:", err);
+  }
+
+  // 3) (Future) Once feat/data-layer-overhaul merges, also pull the active
+  // regulation snapshot for the current year — that's the canonical
+  // version-pinned regulation text and the strongest provenance signal.
+  // Tracked separately to keep this PR independent of the schema migration.
+
+  // De-duplicate by url; preserve insertion order so agency/regulation/snapshot
+  // order is preserved.
+  const seen = new Set<string>();
+  return results.filter((s) => {
+    const key = (s.url ?? s.name).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 // =============================================================================
