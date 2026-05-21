@@ -12,6 +12,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import Link from "next/link";
+import { GroupStrategyView } from "@/components/groups/GroupStrategyView";
 
 interface GroupMember {
   id: string;
@@ -213,6 +214,10 @@ export default function GroupDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Joint application strategy — pulls each active member's playbook,
+         aggregates coverage, flags duplicates, suggests splits. */}
+      <GroupStrategyView groupId={group.id} />
 
       {/* Plans */}
       <div className="rounded-xl border border-brand-sage/10 bg-white p-5 shadow-sm dark:border-brand-sage/20 dark:bg-brand-bark">
