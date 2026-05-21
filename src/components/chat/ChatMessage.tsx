@@ -1,19 +1,22 @@
 "use client";
 
-import { memo, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { User } from "lucide-react";
+import { User, ThumbsUp, ThumbsDown, Check } from "lucide-react";
 
 interface ChatMessageProps {
   role: "user" | "assistant";
   content: string;
   isStreaming?: boolean;
+  /** Persisted message id — when present, enables inline feedback controls. */
+  messageId?: string | null;
 }
 
 export const ChatMessage = memo(function ChatMessage({
   role,
   content,
   isStreaming,
+  messageId,
 }: ChatMessageProps) {
   const isUser = role === "user";
 
@@ -54,12 +57,128 @@ export const ChatMessage = memo(function ChatMessage({
         ) : (
           <div className="space-y-3">
             {renderAssistantContent(content, isStreaming)}
+            {/* Inline feedback — only after the message has streamed in and
+               we have a persisted id to attach feedback to. */}
+            {!isStreaming && messageId && content.trim().length > 0 && (
+              <MessageFeedback messageId={messageId} />
+            )}
           </div>
         )}
       </div>
     </div>
   );
 });
+
+// =============================================================================
+// Inline feedback — 👍 / 👎 with optional free-text reason capture
+// =============================================================================
+
+function MessageFeedback({ messageId }: { messageId: string }) {
+  const [rating, setRating] = useState<"up" | "down" | null>(null);
+  const [reason, setReason] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+  const [showReason, setShowReason] = useState(false);
+
+  const submit = async (next: "up" | "down", withReason?: string) => {
+    if (submitting) return;
+    setRating(next);
+    setSubmitting(true);
+    try {
+      await fetch(`/api/v1/chat/messages/${messageId}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rating: next,
+          reason: withReason ?? null,
+        }),
+      });
+      if (next === "up") {
+        setDone(true);
+      } else {
+        // For thumbs-down we ask why
+        setShowReason(true);
+      }
+    } catch (err) {
+      console.error("[chat:feedback] failed:", err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <p className="flex items-center gap-1 text-xs text-brand-sage">
+        <Check className="h-3.5 w-3.5" />
+        Thanks — feedback recorded.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => submit("up")}
+          disabled={submitting || rating !== null}
+          aria-label="Helpful"
+          className={cn(
+            "flex h-7 w-7 items-center justify-center rounded-md border border-brand-sage/20 text-brand-sage transition-colors hover:bg-brand-sage/10 disabled:opacity-50",
+            rating === "up" && "bg-brand-forest/10 text-brand-forest",
+          )}
+        >
+          <ThumbsUp className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => submit("down")}
+          disabled={submitting || rating !== null}
+          aria-label="Not helpful"
+          className={cn(
+            "flex h-7 w-7 items-center justify-center rounded-md border border-brand-sage/20 text-brand-sage transition-colors hover:bg-brand-sage/10 disabled:opacity-50",
+            rating === "down" && "bg-red-50 text-red-600",
+          )}
+        >
+          <ThumbsDown className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {showReason && rating === "down" && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            submit("down", reason);
+            setDone(true);
+          }}
+          className="flex flex-col gap-2"
+        >
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value.slice(0, 500))}
+            placeholder="What was wrong? (optional)"
+            rows={2}
+            className="resize-none rounded-md border border-brand-sage/20 bg-white/80 px-2 py-1 text-xs text-brand-bark placeholder:text-brand-sage/50 focus:border-brand-forest focus:outline-none focus:ring-1 focus:ring-brand-forest/30 dark:bg-brand-bark/50 dark:text-brand-cream"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              className="rounded-md bg-brand-forest px-2 py-1 text-xs font-medium text-white hover:bg-brand-forest/90"
+            >
+              Send
+            </button>
+            <button
+              type="button"
+              onClick={() => setDone(true)}
+              className="text-xs text-brand-sage hover:text-brand-bark"
+            >
+              Skip
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
 
 function renderAssistantContent(
   content: string,

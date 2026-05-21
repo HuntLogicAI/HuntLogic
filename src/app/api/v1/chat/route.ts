@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { eq, and } from "drizzle-orm";
+import { eq, and, gte, desc } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   hunterPreferences,
@@ -19,6 +19,8 @@ import {
   states,
   species,
   huntUnits,
+  aiChatSessions,
+  aiChatMessages,
 } from "@/lib/db/schema";
 import { config } from "@/lib/config";
 import { assembleContext } from "@/lib/ai/rag";
@@ -121,37 +123,39 @@ export async function POST(request: NextRequest) {
 
   const fullMessage = messageParts.join("\n\n");
 
-  // Try OpenClaw gateway first, then fall back to Anthropic, Gemini, and OpenAI
+  // Try OpenClaw gateway first, then fall back to Anthropic, Gemini, and OpenAI.
+  // Each attempt's outcome (success or failure + model used + latency) is
+  // captured here so admin observability has accurate per-message metadata.
+  const t0 = Date.now();
+  let reply: string;
+  let modelUsed: string;
   try {
-    const reply = await callOpenClawGateway(fullMessage);
-    return NextResponse.json({ text: reply });
+    reply = await callOpenClawGateway(fullMessage);
+    modelUsed = "openclaw-gateway";
   } catch (gatewayErr) {
     console.warn(
       "[chat] OpenClaw gateway unavailable, trying direct providers:",
       gatewayErr instanceof Error ? gatewayErr.message : String(gatewayErr)
     );
-
     try {
-      const reply = await callAnthropicDirect(fullMessage);
-      return NextResponse.json({ text: reply });
+      reply = await callAnthropicDirect(fullMessage);
+      modelUsed = "anthropic-direct";
     } catch (anthropicErr) {
       console.warn(
         "[chat] Anthropic unavailable, trying Gemini:",
         anthropicErr instanceof Error ? anthropicErr.message : String(anthropicErr)
       );
-
       try {
-        const reply = await callGeminiDirect(fullMessage);
-        return NextResponse.json({ text: reply });
+        reply = await callGeminiDirect(fullMessage);
+        modelUsed = "gemini-direct";
       } catch (geminiErr) {
         console.warn(
           "[chat] Gemini unavailable, trying OpenAI:",
           geminiErr instanceof Error ? geminiErr.message : String(geminiErr)
         );
-
         try {
-          const reply = await callOpenAIDirect(fullMessage);
-          return NextResponse.json({ text: reply });
+          reply = await callOpenAIDirect(fullMessage);
+          modelUsed = "openai-direct";
         } catch (openaiErr) {
           console.error("[chat] All backends failed:", openaiErr);
           return NextResponse.json(
@@ -162,6 +166,144 @@ export async function POST(request: NextRequest) {
       }
     }
   }
+  const latencyMs = Date.now() - t0;
+
+  // Persist the exchange so the admin observability dashboard has data to
+  // browse, score, and cluster on. Best-effort — never block the response
+  // on a persistence failure.
+  let assistantMessageId: string | null = null;
+  try {
+    const persisted = await persistChatExchange({
+      userId: session.user.id,
+      userMessage: trimmedMessage,
+      assistantReply: reply,
+      model: modelUsed,
+      latencyMs,
+      contextSummary: summarizeContext({ profileContext, groundingContext }),
+    });
+    assistantMessageId = persisted.assistantMessageId;
+  } catch (persistErr) {
+    console.error("[chat] persistence failed:", persistErr);
+  }
+
+  return NextResponse.json({
+    text: reply,
+    messageId: assistantMessageId,
+  });
+}
+
+// =============================================================================
+// Persistence helpers — wired into POST above
+// =============================================================================
+
+/**
+ * Find the most recent open session for this user (within the last
+ * SESSION_WINDOW_MS) and append to it; otherwise create a new session.
+ * Returns the assistant message id so the client can submit feedback on it.
+ */
+async function persistChatExchange(opts: {
+  userId: string;
+  userMessage: string;
+  assistantReply: string;
+  model: string;
+  latencyMs: number;
+  contextSummary: string | null;
+}): Promise<{ sessionId: string; assistantMessageId: string }> {
+  const SESSION_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+  const cutoff = new Date(Date.now() - SESSION_WINDOW_MS);
+
+  const [existing] = await db
+    .select()
+    .from(aiChatSessions)
+    .where(
+      and(
+        eq(aiChatSessions.userId, opts.userId),
+        gte(aiChatSessions.lastMessageAt, cutoff),
+      ),
+    )
+    .orderBy(desc(aiChatSessions.lastMessageAt))
+    .limit(1);
+
+  const titleFromFirstQuestion = opts.userMessage.slice(0, 120);
+
+  let sessionId: string;
+  if (existing) {
+    sessionId = existing.id;
+    await db
+      .update(aiChatSessions)
+      .set({
+        messageCount: existing.messageCount + 2,
+        lastMessageAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(aiChatSessions.id, existing.id));
+  } else {
+    const [created] = await db
+      .insert(aiChatSessions)
+      .values({
+        userId: opts.userId,
+        title: titleFromFirstQuestion,
+        messageCount: 2,
+        lastMessageAt: new Date(),
+      })
+      .returning();
+    if (!created) throw new Error("Failed to create chat session");
+    sessionId = created.id;
+  }
+
+  // Insert the user message followed by the assistant reply
+  await db.insert(aiChatMessages).values({
+    sessionId,
+    role: "user",
+    content: opts.userMessage,
+  });
+
+  const [assistantRow] = await db
+    .insert(aiChatMessages)
+    .values({
+      sessionId,
+      role: "assistant",
+      content: opts.assistantReply,
+      model: opts.model,
+      latencyMs: opts.latencyMs,
+      tokenCount: estimateTokens(opts.assistantReply),
+      contextSummary: opts.contextSummary,
+      // Simple auto-flag heuristics. We don't pretend these are accurate —
+      // they just route low-quality answers to a review queue.
+      flagged:
+        opts.assistantReply.length < 60 ||
+        /try messaging him on telegram/i.test(opts.assistantReply),
+      flaggedReason:
+        opts.assistantReply.length < 60
+          ? "very_short_response"
+          : /try messaging him on telegram/i.test(opts.assistantReply)
+            ? "fallback_response"
+            : null,
+    })
+    .returning();
+
+  if (!assistantRow) throw new Error("Failed to insert assistant message");
+  return { sessionId, assistantMessageId: assistantRow.id };
+}
+
+function estimateTokens(text: string): number {
+  // Rough heuristic: ~4 chars per token. Good enough for trends without
+  // a tokenizer dependency.
+  return Math.ceil(text.length / 4);
+}
+
+function summarizeContext(opts: {
+  profileContext: string | null;
+  groundingContext: string | null;
+}): string | null {
+  const bits: string[] = [];
+  if (opts.profileContext) {
+    bits.push(`profile(${opts.profileContext.length}c)`);
+  }
+  if (opts.groundingContext) {
+    bits.push(`grounding(${opts.groundingContext.length}c)`);
+  }
+  return bits.length > 0 ? bits.join(" + ") : null;
 }
 
 // =============================================================================
