@@ -62,6 +62,12 @@ export {
   notificationPreferencesRelations,
 } from "./notifications";
 
+// Push subscriptions (VAPID web push)
+export {
+  pushSubscriptions,
+  pushSubscriptionsRelations,
+} from "./push-subscriptions";
+
 // Data sources domain
 export {
   dataSources,

@@ -101,6 +101,26 @@ export async function createNotification(
       console.warn("[notifications] Email send failed:", err);
     });
   }
+
+  // Browser push (non-blocking). Gated by pushEnabled pref + having an
+  // active subscription. The web-push service no-ops silently when VAPID
+  // env vars aren't set, so this is safe to call unconditionally.
+  if (!prefs || prefs.pushEnabled) {
+    (async () => {
+      try {
+        const { sendPushToUser } = await import("./web-push");
+        await sendPushToUser(input.userId, {
+          title: input.title,
+          body: input.body,
+          url: input.actionUrl,
+          tag: input.type,
+          data: { ...(input.metadata ?? {}), type: input.type },
+        });
+      } catch (err) {
+        console.warn("[notifications] Push send failed:", err);
+      }
+    })();
+  }
 }
 
 // ---------------------------------------------------------------------------
