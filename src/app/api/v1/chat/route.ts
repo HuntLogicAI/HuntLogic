@@ -109,10 +109,30 @@ export async function POST(request: NextRequest) {
   const groundingContext = await buildGroundingContext(trimmedMessage);
 
   // Detect state + species so we can return clickable source links alongside
-  // the answer. The same detection function is called inside
-  // buildGroundingContext, but it's cheap enough to call again here and keeps
-  // the source-collection contract narrow + testable.
-  const detected = await detectStateAndSpecies(trimmedMessage);
+  // the answer. Review feedback (PR #18): detecting only against the current
+  // turn breaks follow-ups like "what about archery?" or "when's the
+  // deadline?" — the state/species context lives in the previous turn but
+  // gets dropped, so sources comes back empty. Fix: scan the current message
+  // first (most specific), then walk back through recent turns until we
+  // find a state OR species match. The current-turn match always wins when
+  // it exists, so explicit topic changes ("now tell me about Wyoming
+  // moose") still override stale context.
+  const recentUserTurns = sanitizedHistory
+    .filter((m) => m.role === "user")
+    .slice(-4)
+    .map((m) => m.content);
+  const detectionCandidates: string[] = [trimmedMessage, ...recentUserTurns.reverse()];
+  let detected: { stateId: string | null; speciesId: string | null } = {
+    stateId: null,
+    speciesId: null,
+  };
+  for (const candidate of detectionCandidates) {
+    const partial = await detectStateAndSpecies(candidate);
+    if (!detected.stateId && partial.stateId) detected.stateId = partial.stateId;
+    if (!detected.speciesId && partial.speciesId)
+      detected.speciesId = partial.speciesId;
+    if (detected.stateId && detected.speciesId) break;
+  }
   const sources = await collectSources({
     stateId: detected.stateId,
     speciesId: detected.speciesId,
