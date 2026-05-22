@@ -1,21 +1,25 @@
 // =============================================================================
 // GET /api/v1/dashboard/this-weekend
 // =============================================================================
-// "What can I hunt this weekend?" — surfaces OTC + open-season hunts near the
-// user's home state for the upcoming weekend (today + next 3 days). Used by
-// the dashboard activation widget.
+// "What can I hunt this weekend?" — surfaces OTC + open-season hunts for the
+// upcoming 7 days. When the user has a home state set, results are restricted
+// to that state's region (so a Georgia hunter doesn't see Alaska as a "this
+// weekend" suggestion). When no home state is set, fall back to the full
+// nationwide ranked list. Home-state matches always rank first via scoring
+// boost regardless of the region filter.
 //
 // Data sources (in order of preference):
 //   1. seasons table — for season_start <= today + 7d AND season_end >= today
 //   2. state_species table — to flag OTC vs draw
-//   3. user profile — to filter to user's home state + neighbors
+//   3. user profile — to learn home state (filter + scoring boost)
+//   4. states.region — to narrow to neighboring states ("south", "west", etc.)
 //
 // We deliberately return a small number (5) and keep the response light;
 // the widget is meant to be glanceable, not browsable.
 // =============================================================================
 
 import { NextResponse } from "next/server";
-import { and, eq, sql, gte, lte, or } from "drizzle-orm";
+import { and, eq, sql, gte, lte, or, inArray } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
@@ -72,6 +76,28 @@ export async function GET() {
     console.warn("[this-weekend] profile load failed (continuing):", err);
   }
 
+  // If we know the home state, restrict to that region (west/east/midwest/south).
+  // This addresses PR review feedback: the original implementation only used
+  // home state as a scoring boost, so the widget could surface nationwide
+  // results and label them as "this weekend" near-home suggestions. Without
+  // distance data we use the coarse `states.region` bucket as a sensible
+  // proxy — "near" doesn't have to mean adjacent, just plausibly drivable.
+  let allowedStateIds: string[] | null = null;
+  if (homeStateCode) {
+    const [home] = await db
+      .select({ region: states.region })
+      .from(states)
+      .where(eq(states.code, homeStateCode))
+      .limit(1);
+    if (home?.region) {
+      const sameRegion = await db
+        .select({ id: states.id })
+        .from(states)
+        .where(eq(states.region, home.region));
+      allowedStateIds = sameRegion.map((r) => r.id);
+    }
+  }
+
   // Pull active or imminent seasons.
   const rows = await db
     .select({
@@ -116,6 +142,11 @@ export async function GET() {
           // even when nonresidents can buy over-the-counter equivalents.
           sql`${seasons.tagType} IS NULL OR ${seasons.tagType} = 'draw'`,
         ),
+        // Home-state region filter: only narrow when we actually have a
+        // non-empty allow-list (defensive against weird region data).
+        allowedStateIds && allowedStateIds.length > 0
+          ? inArray(seasons.stateId, allowedStateIds)
+          : undefined,
       ),
     )
     .limit(60);
