@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { DrawOddsChart } from "./DrawOddsChart";
 import { CostBreakdown } from "./CostBreakdown";
+import { ScoringFactorsView } from "./ScoringFactorsView";
 import type { RecommendationOutput } from "@/services/intelligence/types";
 
 interface RecommendationCardProps {
@@ -250,6 +251,19 @@ export function RecommendationCard({
                 Why this fits you
               </h4>
               <p className="mt-1 text-sm text-brand-sage">{rationale}</p>
+            </div>
+
+            {/* Scoring breakdown — shows the per-factor scores and weights
+               that produced this recommendation. Builds trust by showing
+               our work; addresses the audit recommendation. */}
+            <div>
+              <h4 className="text-sm font-semibold text-brand-bark dark:text-brand-cream mb-2">
+                How we scored it
+              </h4>
+              <ScoringFactorsView
+                factors={hunt.factors}
+                weights={hunt.weightsUsed}
+              />
             </div>
 
             {/* Draw odds */}
