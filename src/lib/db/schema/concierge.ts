@@ -114,7 +114,11 @@ export const applicationOrders = pgTable(
     }),
     year: integer("year").notNull(),
     tier: text("tier").notNull(), // 'scout' | 'pro' | 'elite'
-    status: text("status").notNull().default("draft"), // 'draft' | 'pending_payment' | 'paid' | 'in_progress' | 'submitted' | 'completed' | 'cancelled' | 'refunded'
+    // 'draft' | 'pending_payment' | 'paid' | 'in_progress' | 'submitted'
+    // | 'completed' | 'cancelled' | 'refunded' | 'disputed'
+    // (the webhook writes 'disputed' when Stripe fires charge.dispute.created;
+    // ops queues should treat it as a hold state requiring manual review.)
+    status: text("status").notNull().default("draft"),
     stateFeeTotal: decimal("state_fee_total", { precision: 10, scale: 2 })
       .notNull()
       .default("0"),
