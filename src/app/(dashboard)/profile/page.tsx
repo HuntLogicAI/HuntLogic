@@ -67,18 +67,43 @@ export default function ProfilePage() {
             raw.completeness !== null && typeof raw.completeness === "object"
               ? (raw.completeness?.score ?? 0)
               : (raw.completeness ?? 0),
-          statesActive: raw.statesActive ?? 0,
+          // Server-side derived counters (added in PR fixing #18/#19). The
+          // fallbacks below are defensive — they kick in only if the API
+          // doesn't return the new fields (e.g. during deploy windows).
+          statesActive:
+            raw.statesActive ??
+            (Array.isArray(raw.preferences)
+              ? new Set([
+                  ...raw.preferences
+                    .filter(
+                      (p: { category: string; value: unknown }) =>
+                        p.category === "state_interest" && p.value !== false,
+                    )
+                    .map((p: { key: string }) => p.key),
+                  ...(Array.isArray(raw.pointHoldings)
+                    ? raw.pointHoldings.map(
+                        (h: { stateCode: string }) => h.stateCode,
+                      )
+                    : []),
+                ]).size
+              : 0),
           speciesTracked:
             raw.speciesTracked ??
             (Array.isArray(raw.preferences)
               ? raw.preferences.filter(
-                  (p: { category: string }) =>
-                    p.category === "species_interest",
+                  (p: { category: string; value: unknown }) =>
+                    p.category === "species_interest" && p.value !== false,
                 ).length
               : 0),
           totalPoints:
             raw.totalPoints ??
-            (Array.isArray(raw.pointHoldings) ? raw.pointHoldings.length : 0),
+            (Array.isArray(raw.pointHoldings)
+              ? raw.pointHoldings.reduce(
+                  (sum: number, h: { points?: number }) =>
+                    sum + (h.points ?? 0),
+                  0,
+                )
+              : 0),
           onboardingComplete: raw.onboardingComplete ?? false,
         });
         setLoadError(null);
