@@ -1,28 +1,24 @@
-// Webhook idempotency smoke test.
+// Webhook + checkout decision-point regression tests.
 //
 // Stripe retries webhooks aggressively on non-2xx, and even on 2xx can
-// re-fire the same event (delivery attempt 2, 3, ...). The webhook
-// handler must be safe to invoke twice with the same event.
+// re-fire the same event (delivery attempt 2, 3, ...). The handler must
+// be safe to invoke twice with the same event.
 //
-// This test models the small piece of decision logic that lives inside
-// handleCheckoutSessionCompleted: "if order status is already 'paid' or
-// 'in_progress', skip." It's deliberately a unit test on the predicate
-// rather than a full integration test — the latter requires Drizzle +
-// Stripe SDK mocking, which is out of scope for this PR. See
-// docs/AUTO_APPLY_AUDIT.md "Test 6" for the end-to-end variant.
+// Review feedback on PR #22: an earlier version of this file
+// reimplemented `shouldSkipDuplicateCheckout`, `isFullRefund`, and
+// `canCheckout` *inside the test file*, which meant the tests could
+// stay green while the production code drifted. Fixed by extracting
+// those predicates into `services/stripe/predicates.ts` and importing
+// them here — the webhook (`route.ts`) and checkout route
+// (`concierge/orders/[orderId]/checkout/route.ts`) both call the same
+// exported functions, so any drift in behavior is caught by this suite.
 
 import { describe, it, expect } from "vitest";
-
-/**
- * Mirror of the in-handler idempotency check at:
- *   src/app/api/webhooks/stripe/route.ts:146
- *
- * Exposed as a pure function here so we can lock it down with tests
- * without spinning up the full webhook handler.
- */
-function shouldSkipDuplicateCheckout(orderStatus: string): boolean {
-  return orderStatus === "paid" || orderStatus === "in_progress";
-}
+import {
+  shouldSkipDuplicateCheckout,
+  isFullRefund,
+  canCheckout,
+} from "@/services/stripe/predicates";
 
 describe("checkout.session.completed idempotency", () => {
   it("skips when order is already paid", () => {
@@ -54,18 +50,6 @@ describe("checkout.session.completed idempotency", () => {
   });
 });
 
-/**
- * Mirror of the partial-vs-full refund predicate at:
- *   src/app/api/webhooks/stripe/route.ts:455
- */
-function isFullRefund(args: {
-  refunded: boolean;
-  amountRefunded: number;
-  amount: number;
-}): boolean {
-  return args.refunded && args.amountRefunded === args.amount;
-}
-
 describe("charge.refunded full-vs-partial", () => {
   it("flags as full when refunded=true AND amounts equal", () => {
     expect(isFullRefund({ refunded: true, amountRefunded: 10000, amount: 10000 })).toBe(true);
@@ -80,17 +64,6 @@ describe("charge.refunded full-vs-partial", () => {
     expect(isFullRefund({ refunded: false, amountRefunded: 10000, amount: 10000 })).toBe(false);
   });
 });
-
-/**
- * Mirror of the checkout precondition at:
- *   src/app/api/v1/concierge/orders/[orderId]/checkout/route.ts:48
- *
- * Only draft orders can be checked out — protects against double-charging
- * the same order after a successful payment.
- */
-function canCheckout(orderStatus: string): boolean {
-  return orderStatus === "draft";
-}
 
 describe("checkout precondition", () => {
   it("allows draft orders", () => {

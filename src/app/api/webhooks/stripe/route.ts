@@ -20,6 +20,10 @@ import {
 import { eq, and } from "drizzle-orm";
 import { constructWebhookEvent } from "@/services/stripe";
 import {
+  shouldSkipDuplicateCheckout,
+  isFullRefund as computeIsFullRefund,
+} from "@/services/stripe/predicates";
+import {
   notifyOrderPaid,
   notifyPaymentFailed,
   createNotification,
@@ -142,8 +146,10 @@ async function handleCheckoutSessionCompleted(
     return;
   }
 
-  // Idempotency: skip if already paid
-  if (order.status === "paid" || order.status === "in_progress") {
+  // Idempotency: skip if already paid. The predicate lives in
+  // services/stripe/predicates.ts so the unit tests in
+  // app/api/webhooks/stripe/__tests__ exercise the same code.
+  if (shouldSkipDuplicateCheckout(order.status)) {
     console.log(
       `[stripe-webhook] Order ${orderId} already in status '${order.status}', skipping`
     );
@@ -451,8 +457,13 @@ async function handleChargeRefunded(charge: Stripe.Charge) {
     });
   }
 
-  // Determine if full or partial refund
-  const isFullRefund = charge.refunded && charge.amount_refunded === charge.amount;
+  // Determine if full or partial refund (predicate is in
+  // services/stripe/predicates.ts so tests exercise the same logic).
+  const isFullRefund = computeIsFullRefund({
+    refunded: charge.refunded ?? false,
+    amountRefunded: charge.amount_refunded,
+    amount: charge.amount,
+  });
 
   // Update payment status
   await db
