@@ -8,10 +8,14 @@ interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  // Server-issued id once the message lands in ai_chat_messages — required
+  // for the inline feedback control.
+  serverMessageId?: string | null;
 }
 
 interface ChatResponse {
   text?: string;
+  messageId?: string | null;
 }
 
 const aiName = process.env.NEXT_PUBLIC_AI_ASSISTANT_NAME || "Grizz";
@@ -78,7 +82,9 @@ export function ChatContainer() {
           );
         }
 
-        // Update assistant message with Grizz's response
+        // Update assistant message with the response — and capture the
+        // server-issued messageId so inline feedback controls have a
+        // persisted row to attach to.
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -88,6 +94,8 @@ export function ChatContainer() {
                     data && "text" in data && data.text
                       ? data.text
                       : "Sorry, I didn't get a response.",
+                  serverMessageId:
+                    data && "messageId" in data ? data.messageId ?? null : null,
                 }
               : m,
           ),
@@ -157,6 +165,7 @@ export function ChatContainer() {
               msg.id === messages[messages.length - 1]?.id &&
               msg.role === "assistant"
             }
+            messageId={msg.serverMessageId}
           />
         ))}
         <div ref={bottomRef} />
