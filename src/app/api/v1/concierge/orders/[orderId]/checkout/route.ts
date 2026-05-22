@@ -17,6 +17,7 @@ import {
   createCheckoutSession,
   generateOrderNumber,
 } from "@/services/stripe";
+import { canCheckout } from "@/services/stripe/predicates";
 import { config } from "@/lib/config";
 
 const LOG_PREFIX = "[api:concierge/orders/[orderId]/checkout]";
@@ -45,7 +46,9 @@ export async function POST(
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    if (order.status !== "draft") {
+    // Predicate is in services/stripe/predicates.ts so tests exercise the
+    // same logic the route enforces.
+    if (!canCheckout(order.status)) {
       return NextResponse.json(
         { error: "Only draft orders can be checked out" },
         { status: 400 }
