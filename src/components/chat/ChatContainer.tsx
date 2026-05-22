@@ -1,17 +1,19 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { ChatMessage } from "./ChatMessage";
+import { ChatMessage, type ChatSource } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  sources?: ChatSource[];
 }
 
 interface ChatResponse {
   text?: string;
+  sources?: ChatSource[];
 }
 
 const aiName = process.env.NEXT_PUBLIC_AI_ASSISTANT_NAME || "Grizz";
@@ -78,7 +80,8 @@ export function ChatContainer() {
           );
         }
 
-        // Update assistant message with Grizz's response
+        // Update assistant message with Grizz's response and attach any
+        // source citations the backend collected.
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
@@ -88,6 +91,8 @@ export function ChatContainer() {
                     data && "text" in data && data.text
                       ? data.text
                       : "Sorry, I didn't get a response.",
+                  sources:
+                    data && "sources" in data ? data.sources : undefined,
                 }
               : m,
           ),
@@ -157,6 +162,7 @@ export function ChatContainer() {
               msg.id === messages[messages.length - 1]?.id &&
               msg.role === "assistant"
             }
+            sources={msg.sources}
           />
         ))}
         <div ref={bottomRef} />
