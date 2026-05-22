@@ -345,6 +345,23 @@ function UnitCard({
       ? unit.minPointsDrawn - userPoints
       : 0;
 
+  // Sanitize placeholder unit codes from the source data (e.g. literal
+  // "Any Open Unit", "ANY", "*") — those are seed sentinels meant to mean
+  // "statewide / no unit restriction", not real unit identifiers. Showing
+  // "Unit Any Open Unit" is confusing.
+  const placeholderCodes = new Set([
+    "ANY",
+    "ANY OPEN UNIT",
+    "OPEN UNIT",
+    "STATEWIDE",
+    "*",
+    "ALL",
+  ]);
+  const isPlaceholder = placeholderCodes.has(
+    (unit.unitCode ?? "").trim().toUpperCase(),
+  );
+  const unitLabel = isPlaceholder ? "Statewide / no unit filter" : `Unit ${unit.unitCode}`;
+
   return (
     <Card variant="default" className="overflow-hidden">
       {/* Top row: tier badge + unit code + draw-now chip */}
@@ -361,7 +378,7 @@ function UnitCard({
           </span>
           <span className="text-xs text-brand-sage font-medium">#{rank}</span>
           <h3 className="text-base font-bold text-brand-bark dark:text-brand-cream">
-            Unit {unit.unitCode}
+            {unitLabel}
           </h3>
         </div>
 
@@ -417,7 +434,15 @@ function UnitCard({
         <div>
           <span className="font-medium">Weapon:</span>{" "}
           <span className="text-brand-bark dark:text-brand-cream capitalize">
-            {unit.weaponType}
+            {(() => {
+              // Source data sometimes carries placeholder weapon strings
+              // ("unknown", "any", or — most confusingly — "Shotgun" on
+              // big-game records where it really means "general firearm").
+              // Surface "Any" rather than misleading specifics.
+              const raw = (unit.weaponType ?? "").toLowerCase();
+              if (!raw || raw === "unknown" || raw === "any") return "Any";
+              return unit.weaponType;
+            })()}
           </span>
         </div>
       </div>

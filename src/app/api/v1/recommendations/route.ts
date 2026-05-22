@@ -128,8 +128,24 @@ export async function GET(request: NextRequest) {
       filtered = filtered.filter((r) => r.timeline === timeline);
     }
 
-    const total = filtered.length;
-    const paginated = filtered.slice(offset, offset + limit);
+    // Dedupe duplicates at the (state, species, recType, timeline) level —
+    // the playbook generator can occasionally write two near-identical rows
+    // when candidate generation produces overlapping unit-less hunts. The
+    // higher-ranked (lower `rank` integer) row wins; the rest drop out.
+    const seen = new Map<string, (typeof filtered)[number]>();
+    for (const r of filtered) {
+      const key = `${r.stateId}|${r.speciesId}|${r.recType}|${r.timeline ?? ""}|${r.huntUnitId ?? ""}`;
+      const existing = seen.get(key);
+      if (!existing || (r.rank ?? 999) < (existing.rank ?? 999)) {
+        seen.set(key, r);
+      }
+    }
+    const deduped = Array.from(seen.values()).sort(
+      (a, b) => (a.rank ?? 999) - (b.rank ?? 999),
+    );
+
+    const total = deduped.length;
+    const paginated = deduped.slice(offset, offset + limit);
 
     // Format response
     const responseRecs: RecommendationOutput[] = paginated.map((rec) => ({

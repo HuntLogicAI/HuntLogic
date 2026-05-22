@@ -119,7 +119,13 @@ function estimateCost(
   driveHours: number | null,
   stateCosts: Map<string, { tagCost: number; licenseCost: number; pointCost: number }>
 ): CostEstimate {
-  const costs = stateCosts.get(stateCode) ?? {
+  // Track whether we hit state-specific fee data or had to fall back to
+  // defaults. The UX walkthrough flagged that every recommendation in prod
+  // showed the same $1,820 total — that's the all-defaults case, and it's
+  // important to label it so users don't read it as a precise quote.
+  const stateSpecific = stateCosts.get(stateCode);
+  const isExact = !!stateSpecific;
+  const costs = stateSpecific ?? {
     tagCost: COST_CONFIG.defaultTagCost,
     licenseCost: COST_CONFIG.defaultLicenseCost,
     pointCost: COST_CONFIG.defaultPointCost,
@@ -148,6 +154,7 @@ function estimateCost(
     travel,
     gear,
     total: Math.round(tag + license + points + travel + gear),
+    isExact,
   };
 }
 

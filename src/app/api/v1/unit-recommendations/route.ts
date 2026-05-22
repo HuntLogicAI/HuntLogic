@@ -746,5 +746,15 @@ function generateRecommendation(
   if (unit.canDrawNow && srPct !== null && srPct >= 30) {
     return `Well-rounded unit: drawable now with ${srPct}% success and ${drPct ?? "N/A"}% odds.${creepSuffix}`;
   }
+  // Bug fix: previous copy could produce "Balanced pick at 0% draw odds and
+  // 100% success" — statistically impossible (you can't have 100% success
+  // without ever drawing a tag), which strongly implies thin/bad source data.
+  // Detect the contradiction and flag it rather than claiming a "pick".
+  if (drPct === 0 && srPct !== null && srPct > 0) {
+    return `Data flag: this unit shows ${srPct}% historical success but a 0% draw rate — likely a sparse or stale source row. Treat with skepticism until the next data refresh.${creepSuffix}`;
+  }
+  if (drPct === null && srPct === null) {
+    return `Not enough data yet to give a confident pick on this unit. Once we have draw odds and harvest stats it will move into the ranking.${creepSuffix}`;
+  }
   return `Balanced pick${drPct !== null ? ` at ${drPct}% draw odds` : ""}${srPct !== null ? ` and ${srPct}% success` : ""}.${creepSuffix}`;
 }
