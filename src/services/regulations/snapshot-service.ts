@@ -10,7 +10,7 @@
 // =============================================================================
 
 import { createHash } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   regulationSnapshots,
@@ -210,18 +210,28 @@ export async function ingestSnapshot(input: SnapshotInput): Promise<SnapshotResu
   const canonical = canonicalizeText(input.canonicalText);
   const hash = hashContent(canonical);
 
-  // Find prior active snapshot for the same (state, doc_type, year).
+  // Find prior active snapshot for the same slot. Review feedback
+  // (StrongestAvengerStack on PR #11): omitting speciesId from the
+  // dedupe key allowed two species in the same state/year/docType to
+  // match each other's prior snapshot, corrupting the diff history
+  // (e.g. a CO elk regs ingest could diff against the previous CO
+  // mule deer regs row). Slot key is now
+  // (state, species, docType, year, status). speciesId is nullable in
+  // the schema — for state-wide docs we explicitly match IS NULL so
+  // those still dedupe properly amongst themselves.
+  const slotConditions = [
+    eq(regulationSnapshots.stateId, input.stateId),
+    eq(regulationSnapshots.docType, input.docType),
+    eq(regulationSnapshots.year, input.year),
+    eq(regulationSnapshots.status, "active"),
+    input.speciesId
+      ? eq(regulationSnapshots.speciesId, input.speciesId)
+      : isNull(regulationSnapshots.speciesId),
+  ];
   const [prior] = await db
     .select()
     .from(regulationSnapshots)
-    .where(
-      and(
-        eq(regulationSnapshots.stateId, input.stateId),
-        eq(regulationSnapshots.docType, input.docType),
-        eq(regulationSnapshots.year, input.year),
-        eq(regulationSnapshots.status, "active")
-      )
-    )
+    .where(and(...slotConditions))
     .orderBy(desc(regulationSnapshots.snapshotAt))
     .limit(1);
 

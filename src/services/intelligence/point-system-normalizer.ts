@@ -37,8 +37,17 @@ export type PointSystemType =
 
 export interface PointSystemRule {
   type: PointSystemType;
-  // Optional caps / multipliers used by `effectivePoints`.
-  loyaltyBonusCap?: number; // e.g. AZ +5 max
+  /**
+   * Maximum loyalty bonus a state grants on TOP of accumulated bonus
+   * points (e.g. AZ +5 for 5+ consecutive years of applying). This is
+   * NOT a cap on a hunter's total bonus points — those keep
+   * accumulating indefinitely. Used for documentation and future
+   * loyalty-bonus modeling; intentionally NOT applied as a clamp in
+   * `effectivePoints()` (see PR #11 review feedback — the previous
+   * implementation collapsed all AZ hunters with >5 points down to 5,
+   * which under-rated experienced applicants).
+   */
+  loyaltyBonusCap?: number;
   randomShare?: number; // for weighted_preference: portion of tags drawn randomly (0..1)
 }
 
@@ -128,12 +137,17 @@ export function effectivePoints(
 
     case "bonus": {
       // In a bonus system, an applicant with N bonus points has N+1
-      // entries (1 base + N bonus). The minimum points seen drawing is
-      // closer to "preference equivalent" than raw, but agency reporting
-      // already uses min_bonus_points as the cut. We just clamp to the
-      // loyalty cap when set.
-      const cap = rule.loyaltyBonusCap ?? Infinity;
-      return Math.min(minPointsDrawn, cap);
+      // entries (1 base + N bonus). The min_points_drawn value the
+      // agency publishes is already the bonus-point cut, so it maps
+      // approximately linearly to "preference points needed."
+      //
+      // Review feedback (PR #11): the previous implementation clamped
+      // by `loyaltyBonusCap` (5 for AZ), but that cap describes a
+      // separate +5 loyalty bonus a hunter earns on top of accumulated
+      // bonus points — it is NOT a cap on total bonus points. Clamping
+      // collapsed every AZ hunter with >5 bonus points to 5, which
+      // wrecked relative ranking and forecasting.
+      return minPointsDrawn;
     }
 
     case "bonus_squared": {

@@ -60,9 +60,15 @@ describe("point-system-normalizer", () => {
       expect(effectivePoints({ type: "pure_preference" }, 0)).toBe(0);
     });
 
-    it("clamps bonus points to loyalty cap", () => {
+    it("returns bonus points as-is (does NOT clamp by loyaltyBonusCap)", () => {
+      // PR #11 review fix: loyaltyBonusCap describes the +5 loyalty
+      // bonus a state adds for consistent applicants, not a cap on
+      // accumulated bonus points. Hunters with 8 bonus points must
+      // be rated above hunters with 5; the previous clamp collapsed
+      // them together and wrecked ranking.
       expect(effectivePoints({ type: "bonus", loyaltyBonusCap: 5 }, 3)).toBe(3);
-      expect(effectivePoints({ type: "bonus", loyaltyBonusCap: 5 }, 8)).toBe(5);
+      expect(effectivePoints({ type: "bonus", loyaltyBonusCap: 5 }, 8)).toBe(8);
+      expect(effectivePoints({ type: "bonus", loyaltyBonusCap: 5 }, 15)).toBe(15);
     });
 
     it("squares for bonus_squared", () => {
