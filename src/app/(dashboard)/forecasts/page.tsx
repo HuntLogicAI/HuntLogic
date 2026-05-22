@@ -37,11 +37,13 @@ interface ForecastData {
   roi: {
     recommendation: string;
     costPerOpportunity: number;
-    projectedYears: number;
+    /** null = unreachable (never going to draw at current trend). 0 = already eligible. */
+    projectedYears: number | null;
     totalInvestment: number;
     explanation: string;
   };
-  trend: string;
+  /** null = "not enough data" — the trend chip should be hidden. */
+  trend: string | null;
 }
 
 /* ---- Raw API shapes (what the server actually returns) ---- */
@@ -242,6 +244,20 @@ function ForecastsPageInner() {
           },
         ];
 
+        // Bug fix: surface "we don't actually have enough data" vs. "we
+        // measured a stable trend" as distinct states. Two historical
+        // data points is the minimum the trend chart can meaningfully
+        // render — below that we suppress the trend chip entirely.
+        const hasEnoughForTrend = historicalData.length >= 2;
+
+        // Bug fix: distinguish "already eligible" (0 years) from
+        // "unreachable at current trend" (null). The previous code
+        // collapsed both to 0, producing the contradictory "Yrs to
+        // Draw ~0 / may never reach the threshold" combo.
+        const rawYears = rawAssessment?.estimatedYearsToTag;
+        const projectedYears: number | null =
+          rawYears === null || rawYears === undefined ? null : rawYears;
+
         setForecast({
           pointCreep: {
             historicalData,
@@ -261,11 +277,11 @@ function ForecastsPageInner() {
                     Math.max(1, rawAssessment.estimatedYearsToTag ?? 1)
                 )
               : 0,
-            projectedYears: rawAssessment?.estimatedYearsToTag ?? 0,
+            projectedYears,
             totalInvestment: rawAssessment?.totalFutureInvestment ?? 0,
             explanation: rawAssessment?.verdictRationale ?? "",
           },
-          trend: rawForecast?.trend ?? "stable",
+          trend: hasEnoughForTrend ? (rawForecast?.trend ?? "stable") : null,
         });
       } catch (err) {
         console.error("[forecasts] Failed to fetch forecast:", err);
@@ -282,7 +298,11 @@ function ForecastsPageInner() {
     setSelection((prev) => ({ ...prev, [field]: value }));
   };
 
-  const TrendIcon = forecast ? (trendIcons[forecast.trend] || Minus) : Minus;
+  // forecast.trend can be null when there isn't enough historical data to
+  // judge a trend; the icon is only rendered when a non-null trend exists,
+  // but keep the variable defined to satisfy the JSX below.
+  const TrendIcon =
+    forecast && forecast.trend ? (trendIcons[forecast.trend] || Minus) : Minus;
   const roiInfo = forecast ? (roiColors[forecast.roi.recommendation] ?? roiColors.hold!) : roiColors.hold!;
 
   if (isInitializing) {
@@ -368,30 +388,39 @@ function ForecastsPageInner() {
                 <h3 className="font-semibold text-brand-bark dark:text-brand-cream">
                   Point Creep Trend
                 </h3>
-                <div className="flex items-center gap-1">
-                  <TrendIcon
-                    className={cn(
-                      "h-4 w-4",
-                      forecast.trend === "rising"
-                        ? "text-red-500"
-                        : forecast.trend === "declining"
-                          ? "text-green-500"
-                          : "text-amber-500"
-                    )}
-                  />
-                  <span
-                    className={cn(
-                      "text-xs font-medium capitalize",
-                      forecast.trend === "rising"
-                        ? "text-red-500"
-                        : forecast.trend === "declining"
-                          ? "text-green-500"
-                          : "text-amber-500"
-                    )}
-                  >
-                    {forecast.trend}
+                {forecast.trend ? (
+                  <div className="flex items-center gap-1">
+                    <TrendIcon
+                      className={cn(
+                        "h-4 w-4",
+                        forecast.trend === "rising"
+                          ? "text-red-500"
+                          : forecast.trend === "declining"
+                            ? "text-green-500"
+                            : "text-amber-500"
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "text-xs font-medium capitalize",
+                        forecast.trend === "rising"
+                          ? "text-red-500"
+                          : forecast.trend === "declining"
+                            ? "text-green-500"
+                            : "text-amber-500"
+                      )}
+                    >
+                      {forecast.trend}
+                    </span>
+                  </div>
+                ) : (
+                  // Bug fix: previously rendered "Stable" alongside the
+                  // PointCreepGraph's "Not enough data for trend" empty
+                  // state. Suppress when we don't actually have a trend.
+                  <span className="text-xs font-medium text-brand-sage italic">
+                    pending data
                   </span>
-                </div>
+                )}
               </div>
             </CardHeader>
             <CardContent>
@@ -443,7 +472,15 @@ function ForecastsPageInner() {
                 <div className="rounded-lg bg-brand-sage/5 p-2 text-center dark:bg-brand-sage/10">
                   <p className="text-[10px] leading-tight text-brand-sage">Yrs to Draw</p>
                   <p className="text-base font-bold text-brand-bark dark:text-brand-cream">
-                    ~{forecast.roi.projectedYears}
+                    {/* Bug fix: null = unreachable at current trend,
+                       0 = already eligible. The previous code rendered
+                       both as "~0", which contradicted the "may never
+                       reach" rationale shown below. */}
+                    {forecast.roi.projectedYears === null
+                      ? "Unreachable"
+                      : forecast.roi.projectedYears === 0
+                        ? "Now"
+                        : `~${forecast.roi.projectedYears}`}
                   </p>
                 </div>
                 <div className="rounded-lg bg-brand-sage/5 p-2 text-center dark:bg-brand-sage/10">
