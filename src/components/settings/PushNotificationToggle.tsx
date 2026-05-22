@@ -120,15 +120,45 @@ export function PushNotificationToggle() {
       });
 
       const json = sub.toJSON();
-      await fetch("/api/v1/notifications/push/subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          endpoint: json.endpoint,
-          keys: json.keys,
-          userAgent: navigator.userAgent,
-        }),
-      });
+      // Persist the subscription server-side. The browser-side subscription
+      // already exists at this point — if the server rejects (auth, validation,
+      // VAPID misconfig), we MUST unwind the browser subscription too,
+      // otherwise the browser holds a push subscription the server never
+      // stored and the user sees "subscribed" while push delivery is dead.
+      let serverPersisted = false;
+      try {
+        const res = await fetch("/api/v1/notifications/push/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            endpoint: json.endpoint,
+            keys: json.keys,
+            userAgent: navigator.userAgent,
+          }),
+        });
+        serverPersisted = res.ok;
+        if (!res.ok) {
+          console.warn(
+            "[push:toggle] server rejected subscription:",
+            res.status,
+            await res.text().catch(() => ""),
+          );
+        }
+      } catch (err) {
+        console.error("[push:toggle] server POST failed:", err);
+      }
+
+      if (!serverPersisted) {
+        // Unwind the browser subscription so state matches reality.
+        try {
+          await sub.unsubscribe();
+        } catch (err) {
+          console.warn("[push:toggle] unwind unsubscribe failed:", err);
+        }
+        setStatus("unsubscribed");
+        return;
+      }
+
       setStatus("subscribed");
     } catch (err) {
       console.error("[push:toggle] subscribe failed:", err);
