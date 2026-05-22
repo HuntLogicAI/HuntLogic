@@ -5,6 +5,7 @@ import { Bell, Globe, User, Shield, Download, Check, Link2, ChevronRight, Trash2
 import { apiClient } from "@/lib/api/client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { PushNotificationToggle } from "@/components/settings/PushNotificationToggle";
 
 interface NotifPrefs {
   emailEnabled: boolean;
@@ -171,6 +172,13 @@ export default function SettingsPage() {
           <ToggleRow label="Draw Results" description="Notifications when draw results are posted" checked={notifPrefs.drawResults} onChange={(v) => updateNotif("drawResults", v)} />
           <ToggleRow label="Strategy Updates" description="When your recommendations change" checked={notifPrefs.strategyUpdates} onChange={(v) => updateNotif("strategyUpdates", v)} />
           <ToggleRow label="Point Creep Alerts" description="When point requirements shift significantly" checked={notifPrefs.pointCreepAlerts} onChange={(v) => updateNotif("pointCreepAlerts", v)} />
+          {/* Browser push opt-in — per-device, independent of the email + in-app channels above */}
+          <div className="border-t border-brand-sage/10 pt-3 dark:border-brand-sage/20">
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-brand-sage">
+              Browser push (this device)
+            </p>
+            <PushNotificationToggle />
+          </div>
         </div>
       </SettingsCard>
 
