@@ -142,8 +142,16 @@ export async function GET(
     playbookOwner[p.playbookId] = p.userId;
   }
 
-  // Top 5 recommendations per playbook.
-  const recRows = await db
+  // Pull every recommendation for the active playbooks, then enforce the
+  // top-N-per-playbook cap in-memory. Review feedback (PR #21): the
+  // original implementation said "Top 5 recommendations per playbook" but
+  // the SQL had no rank cutoff, so coverage/overlap/split outputs were
+  // inflated by long-tail recs that members weren't actually prioritizing.
+  // Doing the cap in code keeps the SQL simple — we don't need to write a
+  // window function — and the row volume is small (active playbooks ×
+  // active members for one group).
+  const TOP_N_PER_PLAYBOOK = 5;
+  const allRecRows = await db
     .select({
       id: recommendations.id,
       playbookId: recommendations.playbookId,
@@ -160,6 +168,21 @@ export async function GET(
     .innerJoin(species, eq(recommendations.speciesId, species.id))
     .leftJoin(huntUnits, eq(recommendations.huntUnitId, huntUnits.id))
     .where(inArray(recommendations.playbookId, playbookIds));
+
+  // Enforce the top-N-per-playbook cap. Lower `rank` integers = higher
+  // priority; null ranks sink to the bottom so they only show up if a
+  // playbook has fewer than N ranked recs.
+  const recsByPlaybook = new Map<string, typeof allRecRows>();
+  for (const r of allRecRows) {
+    const bucket = recsByPlaybook.get(r.playbookId) ?? [];
+    bucket.push(r);
+    recsByPlaybook.set(r.playbookId, bucket);
+  }
+  const recRows: typeof allRecRows = [];
+  for (const bucket of recsByPlaybook.values()) {
+    bucket.sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
+    recRows.push(...bucket.slice(0, TOP_N_PER_PLAYBOOK));
+  }
 
   // Map recs back to members with display names.
   const memberByUserId = new Map(
