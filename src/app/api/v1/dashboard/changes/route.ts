@@ -48,10 +48,18 @@ export async function GET() {
       const daysUntil = Math.ceil(
         (new Date(d.deadlineDate).getTime() - Date.now()) / (24 * 60 * 60 * 1000)
       );
+      // Deadline titles already begin with the state code (e.g. "WY Elk
+      // Nonresident Draw Results"), so only prepend the state code when
+      // it's missing — avoids "WY WY ..." double-prefix on the dashboard.
+      const titleHasState =
+        d.stateCode && d.title.startsWith(`${d.stateCode} `);
+      const displayTitle = titleHasState
+        ? d.title
+        : `${d.stateCode} ${d.title}`.trim();
       changes.push({
         id: `deadline-${d.id}`,
         type: daysUntil <= 7 ? "deadline_soon" : "deadline_new",
-        title: `${d.stateCode} ${d.title}`,
+        title: displayTitle,
         description: `${d.deadlineType} deadline in ${daysUntil} day${daysUntil !== 1 ? "s" : ""}`,
         actionUrl: "/calendar",
         icon: "deadline",
