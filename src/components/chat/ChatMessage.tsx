@@ -132,9 +132,16 @@ function renderAssistantContent(
   if (!trimmed) {
     return isStreaming
       ? [
-          <p key="streaming-placeholder">
-            <span className="inline-block h-4 w-1 motion-safe:animate-pulse bg-brand-forest/60 align-middle dark:bg-brand-cream/60" />
-          </p>,
+          <div key="typing-indicator" className="space-y-2">
+            <p className="text-brand-bark dark:text-brand-cream">
+              Got it — give me a few seconds to research and report back...
+            </p>
+            <div className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-brand-forest/60 motion-safe:animate-bounce dark:bg-brand-cream/60" style={{ animationDelay: "0ms", animationDuration: "1s" }} />
+              <span className="h-2 w-2 rounded-full bg-brand-forest/60 motion-safe:animate-bounce dark:bg-brand-cream/60" style={{ animationDelay: "150ms", animationDuration: "1s" }} />
+              <span className="h-2 w-2 rounded-full bg-brand-forest/60 motion-safe:animate-bounce dark:bg-brand-cream/60" style={{ animationDelay: "300ms", animationDuration: "1s" }} />
+            </div>
+          </div>,
         ]
       : [];
   }

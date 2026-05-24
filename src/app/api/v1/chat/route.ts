@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   hunterPreferences,
@@ -52,7 +52,38 @@ Behavior rules:
 - Separate official state-agency facts from hunter-consensus nuance. Label hunter-consensus guidance clearly.
 - Use specific numbers only when they are present in the grounded context. Never invent draw odds or tag counts.
 - If confidence is limited, say exactly what is uncertain.
-- When the message includes an "Authoritative sources" block, cite the most relevant entries inline using their bracket numbers (e.g. "[1]") immediately after the claim they support. Do NOT add a long "Sources" footer of your own — the UI renders the structured list separately. Only cite sources that were actually provided; do not invent citation numbers.`;
+- When the message includes an "Authoritative sources" block, cite the most relevant entries inline using their bracket numbers (e.g. "[1]") immediately after the claim they support. Do NOT add a long "Sources" footer of your own — the UI renders the structured list separately. Only cite sources that were actually provided; do not invent citation numbers.
+
+CRITICAL anti-hallucination rules:
+- If NO "Authoritative sources" block is present in the message, you have NO grounded data context. In that case, refuse to make state-specific factual claims (which states offer which species, draw odds, point thresholds, unit numbers, season dates, license costs, etc.). Instead say plainly: "I don't have current data on [state]'s [species] regulations loaded right now — please verify with the state agency. I can help with general strategy if useful."
+- NEVER assert that a state does NOT have a given species, season, or tag without an explicit grounded fact saying so. Many states have surprising species distributions (e.g. Nevada DOES have elk; Iowa DOES have elk hunts; New Hampshire DOES have moose). Default to "I'd need to verify" rather than asserting absence.
+- When in doubt, ask clarifying questions ("Which state are your points actually in?") instead of guessing across multiple states.
+
+Tools available to you:
+- query_hunting_database(state_code, species_slug): Returns structured data we have locally (hunt unit names, draw odds, harvest stats). USE THIS FIRST whenever the user asks a state+species-specific question. We currently have full data for NV. If it returns rowCount: 0, fall through to web_search.
+- web_search(query): Live web search. Use for any state/species/unit data that query_hunting_database didn\'t return, or for current-year deadlines, rule changes, news. Prefer official state agency sites (.gov, ndow.org, cpw.state.co.us, wgfd.wyo.gov, azgfd.com, etc.) over hunter forums.
+
+Rules for tool use:
+- If the user mentions a state and species, ALWAYS try query_hunting_database first.
+- If query_hunting_database returns rows, use those numbers in your answer and cite the state agency as the source.
+- If query_hunting_database returns nothing, use web_search to find the data, then answer with citations.
+- Never claim "I don\'t have data" without first trying both tools. The new rule is: search, then answer.
+- After tools return data, cite it inline with [1], [2], etc. Match each fact to the source that backs it.
+
+Response depth & strategy framing (CRITICAL):
+For any question about WHERE to apply, WHICH UNITS, or strategic decisions ("I have X points, where should I apply", "best units for...", "strategy for..."), do NOT just dump a single sentence of data. Structure your answer as a full strategic brief:
+
+1. REALITY CHECK (1-2 sentences): State the math plainly. "At 7 points in NV elk, you are sub-1% draw odds for any top-tier unit. Even with the squared bonus system, you are in 'lottery ticket' territory, not 'expected draw within 2 years' territory."
+
+2. THE PLAN (3-5 sentences): Recommend a concrete strategy that respects the user's stated preferences. If they said "OK not drawing instead of drawing a non-trophy unit," validate that as a sound multi-year strategy: apply for the absolute top units every cycle, gain a point if you don't draw, and eventually you draw a primo tag. Spell out the logic so the user sees you understand their thinking.
+
+3. RECOMMENDED UNITS (ranked, with rationale): List the top 3-5 units that match the user's goal, ranked. For each: unit code, draw rate at user's point level, bull quality / terrain / public-land %, why it made the list. Use the actual data from query_hunting_database. If web_search filled in gaps (e.g., bull-quality reputation), cite it.
+
+4. WHAT TO DO RIGHT NOW (1-2 sentences): Concrete action. "Apply for Unit X as your first choice, Unit Y as backup. Application deadline is [date]. If you don't draw, you bank a point and reset for next year."
+
+5. OPTIONAL: WHEN TO RE-EVALUATE: "If you're still pointless after 3 more years, revisit — point creep may have outrun you and a different strategy makes sense."
+
+Length target: 200-400 words for strategy questions. Shorter only if the user asks something narrow ("what's the deadline?"). Always lead with the answer, but the "answer" to a strategy question is the plan, not a single stat.`;
 
 let stateReferenceCache:
   | { id: string; code: string; name: string }[]
@@ -596,18 +627,171 @@ async function callAnthropicDirect(message: string): Promise<string> {
 
   // Dynamic import to avoid build errors when SDK isn't needed
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey, timeout: 20_000 });
+  const client = new Anthropic({ apiKey, timeout: 60_000 });
 
-  const response = await client.messages.create({
-    model: config.ai.model,
-    max_tokens: 4096,
-    temperature: 0.7,
-    system: CHAT_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: message }],
-  });
+  // ---------------------------------------------------------------------------
+  // Agentic tool use: Claude can call web_search (Anthropic server tool) and
+  // our custom query_hunting_database tool to get fresh data before answering.
+  // ---------------------------------------------------------------------------
+  const tools: import("@anthropic-ai/sdk/resources").Tool[] = [
+    {
+      // Custom tool: query our seeded structured data (hunt_units, draw_odds,
+      // harvest_stats, state_regulations). Use this BEFORE web_search for
+      // states/species we already have data for (currently: Nevada).
+      name: "query_hunting_database",
+      description:
+        "Query the HuntLogic database for structured hunting data on a specific state and species. Returns hunt unit names, draw odds, harvest statistics, and any agency-published facts we have stored locally. Use this FIRST before web_search — it's faster and more authoritative than web results. Returns an empty result if we have no data for the requested state/species.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          state_code: {
+            type: "string",
+            description: "Two-letter state code, e.g. 'NV' for Nevada, 'CO' for Colorado.",
+          },
+          species_slug: {
+            type: "string",
+            description:
+              "Species slug (lowercase, underscored), e.g. 'elk', 'mule_deer', 'pronghorn', 'bighorn_sheep', 'mountain_goat'.",
+          },
+        },
+        required: ["state_code", "species_slug"],
+      },
+    },
+    {
+      // Anthropic-provided server tool: web search.
+      // Model executes the search server-side, no client work needed.
+      type: "web_search_20250305" as const,
+      name: "web_search",
+      max_uses: 5,
+    } as unknown as import("@anthropic-ai/sdk/resources").Tool,
+  ];
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  return textBlock?.text || "Sorry, I couldn't generate a response.";
+  type MessageParam = import("@anthropic-ai/sdk/resources").MessageParam;
+  const conversationMessages: MessageParam[] = [
+    { role: "user", content: message },
+  ];
+
+  // Agentic loop — keep calling Claude until it returns a final text response
+  // (stop_reason !== "tool_use"). Hard cap at 6 iterations to prevent runaway.
+  let lastTextResponse = "";
+  for (let iteration = 0; iteration < 6; iteration++) {
+    const response = await client.messages.create({
+      model: config.ai.model,
+      max_tokens: 4096,
+      temperature: 0.7,
+      system: CHAT_SYSTEM_PROMPT,
+      tools,
+      messages: conversationMessages,
+    });
+
+    // Capture latest text in case the loop exits with tool_use stop_reason
+    const textBlock = response.content.find((b) => b.type === "text");
+    if (textBlock && "text" in textBlock) {
+      lastTextResponse = textBlock.text;
+    }
+
+    if (response.stop_reason !== "tool_use") {
+      // Final answer
+      return lastTextResponse || "Sorry, I couldn't generate a response.";
+    }
+
+    // Add the assistant turn (containing tool_use blocks) to the conversation
+    conversationMessages.push({
+      role: "assistant",
+      content: response.content,
+    });
+
+    // Execute every tool_use block in this turn (skip server tools — Anthropic
+    // executes those itself; we only handle our custom client tools).
+    const toolResults: import("@anthropic-ai/sdk/resources").ToolResultBlockParam[] = [];
+    for (const block of response.content) {
+      if (block.type !== "tool_use") continue;
+      if (block.name === "query_hunting_database") {
+        const args = block.input as { state_code?: string; species_slug?: string };
+        const result = await executeQueryHuntingDatabase(
+          args.state_code ?? "",
+          args.species_slug ?? "",
+        );
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: result,
+        });
+      }
+      // Server tools (web_search) are handled by Anthropic — no client action
+    }
+
+    if (toolResults.length === 0) {
+      // No client tools fired this turn (server tools only). Loop again so the
+      // model can see the server-side results and continue or finalize.
+      // The server tool results are already in `response.content`, so we just
+      // need to give the model an empty user turn to continue. Actually the
+      // model continues on its own — we should NOT add an empty turn. Break.
+      break;
+    }
+
+    conversationMessages.push({ role: "user", content: toolResults });
+  }
+
+  return lastTextResponse || "Sorry, I couldn't generate a response after tool use.";
+}
+
+// ---------------------------------------------------------------------------
+// Tool executor: query our seeded structured data for a state+species
+// ---------------------------------------------------------------------------
+async function executeQueryHuntingDatabase(
+  stateCode: string,
+  speciesSlug: string,
+): Promise<string> {
+  const normalizedState = stateCode.toUpperCase().trim();
+  const normalizedSpecies = speciesSlug.toLowerCase().trim();
+
+  if (!normalizedState || !normalizedSpecies) {
+    return JSON.stringify({
+      error: "Both state_code and species_slug are required.",
+    });
+  }
+
+  try {
+    const result = await db.execute(sql`
+      SELECT
+        hu.unit_code, hu.unit_name, hu.public_land_pct,
+        do.year AS odds_year, do.residency, do.weapon, do.hunt_type,
+        do.points_required, do.draw_rate, do.total_applicants, do.tags_issued,
+        hs.year AS stats_year, hs.success_rate, hs.average_days,
+        hs.total_hunters, hs.total_harvest
+      FROM states s
+      LEFT JOIN species sp ON sp.slug = ${normalizedSpecies}
+      LEFT JOIN hunt_units hu ON hu.state_id = s.id AND hu.species_id = sp.id
+      LEFT JOIN draw_odds do ON do.hunt_unit_id = hu.id
+      LEFT JOIN harvest_stats hs ON hs.hunt_unit_id = hu.id
+      WHERE s.code = ${normalizedState}
+      ORDER BY hu.unit_code NULLS LAST, do.year DESC NULLS LAST
+      LIMIT 200
+    `);
+    const rows = (result as unknown as { rows?: unknown[] }).rows ?? result;
+    const count = Array.isArray(rows) ? rows.length : 0;
+    if (count === 0) {
+      return JSON.stringify({
+        state: normalizedState,
+        species: normalizedSpecies,
+        rowCount: 0,
+        note: "No structured data in HuntLogic database for this state+species. Recommend using web_search to look up current agency data.",
+      });
+    }
+    return JSON.stringify({
+      state: normalizedState,
+      species: normalizedSpecies,
+      rowCount: count,
+      rows: rows,
+      note: "Structured data from HuntLogic database (last seeded from official agency sources). Cite by state agency name.",
+    });
+  } catch (err) {
+    return JSON.stringify({
+      error: err instanceof Error ? err.message : String(err),
+      hint: "Database query failed. Consider using web_search as a fallback.",
+    });
+  }
 }
 
 async function callOpenAIDirect(message: string): Promise<string> {

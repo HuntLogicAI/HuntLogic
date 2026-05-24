@@ -6,8 +6,20 @@
 import { db } from "@/lib/db";
 import { sql } from "drizzle-orm";
 import * as XLSX from "xlsx";
+import * as fs from "node:fs";
 
+const EXCEL_URL = "https://www.ndow.org/wp-content/uploads/2026/03/2025-Nevada-Big-Game-Hunt-Data.xlsx";
 const EXCEL_PATH = "/tmp/nv-hunt-stats-2025.xlsx";
+
+async function ensureExcel(): Promise<void> {
+  if (fs.existsSync(EXCEL_PATH)) return;
+  console.log(`Downloading NV hunt data from ${EXCEL_URL}...`);
+  const res = await fetch(EXCEL_URL);
+  if (!res.ok) throw new Error(`Failed to download NV hunt data: HTTP ${res.status}`);
+  const buf = await res.arrayBuffer();
+  fs.writeFileSync(EXCEL_PATH, Buffer.from(buf));
+  console.log(`Saved ${buf.byteLength} bytes to ${EXCEL_PATH}`);
+}
 
 const SPECIES_MAP: Record<string, string> = {
   Antelope: "pronghorn",
@@ -43,6 +55,7 @@ function parseNum(v: unknown): number | null {
 }
 
 async function main() {
+  await ensureExcel();
   // ── Load Excel ──────────────────────────────────────────────────────────────
   console.log("Parsing Excel...");
   const wb = XLSX.readFile(EXCEL_PATH);
