@@ -684,14 +684,20 @@ async function callAnthropicDirect(message: string): Promise<string> {
       messages: conversationMessages,
     });
 
-    // Capture latest text in case the loop exits with tool_use stop_reason
-    const textBlock = response.content.find((b) => b.type === "text");
-    if (textBlock && "text" in textBlock) {
-      lastTextResponse = textBlock.text;
+    // Concatenate ALL text blocks from this response. The model may interleave
+    // text with server-tool calls (e.g. "Let me search..." [web_search] "Here's
+    // the plan...") — capturing only the first text block loses the real answer.
+    const allText = response.content
+      .filter((b) => b.type === "text")
+      .map((b) => ("text" in b ? b.text : ""))
+      .join("\n\n")
+      .trim();
+    if (allText) {
+      lastTextResponse = allText;
     }
 
     if (response.stop_reason !== "tool_use") {
-      // Final answer
+      // Final answer (end_turn, max_tokens, stop_sequence, etc.)
       return lastTextResponse || "Sorry, I couldn't generate a response.";
     }
 
