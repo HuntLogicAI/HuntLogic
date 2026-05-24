@@ -26,10 +26,10 @@ import { assembleContext } from "@/lib/ai/rag";
 import { buildKnowledgeContext } from "@/lib/ai/knowledge-packs";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Vercel Pro allows up to 300s. Agentic loop with web_search can take
+// 60-180s for multi-turn responses (preamble → search → DB query → final).
+export const maxDuration = 300;
 
-const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "https://huntlogic.mysupertool.app";
-const GATEWAY_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || "";
 const MAX_MESSAGE_LENGTH = 4_000;
 const MAX_HISTORY_ITEMS = 10;
 const MAX_HISTORY_CONTENT_LENGTH = 2_000;
@@ -63,11 +63,12 @@ Tools available to you:
 - query_hunting_database(state_code, species_slug): Returns structured data we have locally (hunt unit names, draw odds, harvest stats). USE THIS FIRST whenever the user asks a state+species-specific question. We currently have full data for NV. If it returns rowCount: 0, fall through to web_search.
 - web_search(query): Live web search. Use for any state/species/unit data that query_hunting_database didn\'t return, or for current-year deadlines, rule changes, news. Prefer official state agency sites (.gov, ndow.org, cpw.state.co.us, wgfd.wyo.gov, azgfd.com, etc.) over hunter forums.
 
-Rules for tool use:
-- If the user mentions a state and species, ALWAYS try query_hunting_database first.
-- If query_hunting_database returns rows, use those numbers in your answer and cite the state agency as the source.
-- If query_hunting_database returns nothing, use web_search to find the data, then answer with citations.
-- Never claim "I don\'t have data" without first trying both tools. The new rule is: search, then answer.
+Rules for tool use (LATENCY-CRITICAL — pick the minimum tool path):
+- If the user mentions a state and species, call query_hunting_database first. It returns in ~100ms.
+- If query_hunting_database returns rowCount > 0, ANSWER FROM THAT DATA. Do NOT also call web_search — the database is the authoritative source, and web_search adds 5-15 seconds.
+- ONLY call web_search if (a) query_hunting_database returned rowCount: 0, OR (b) the user explicitly asks about current-year deadlines, rule changes, news, or hunter-forum reputation that the database wouldn't have.
+- Never call web_search "just to verify" data we already returned from the DB — that doubles response time for no value.
+- Max one web_search per response. If you've already searched, answer with what you have.
 - After tools return data, cite it inline with [1], [2], etc. Match each fact to the source that backs it.
 
 Response depth & strategy framing (CRITICAL):
@@ -194,47 +195,64 @@ export async function POST(request: NextRequest) {
 
   const fullMessage = messageParts.join("\n\n");
 
-  // Try OpenClaw gateway first, then fall back to Anthropic, Gemini, and OpenAI
-  try {
-    const reply = await callOpenClawGateway(fullMessage);
-    return NextResponse.json({ text: reply, sources });
-  } catch (gatewayErr) {
-    console.warn(
-      "[chat] OpenClaw gateway unavailable, trying direct providers:",
-      gatewayErr instanceof Error ? gatewayErr.message : String(gatewayErr)
-    );
+  // Stream the response over SSE so the user sees tokens as they arrive,
+  // not after the full agentic loop completes (30+ seconds).
+  return streamAnthropicResponse(fullMessage, sources);
+}
 
-    try {
-      const reply = await callAnthropicDirect(fullMessage);
-      return NextResponse.json({ text: reply, sources });
-    } catch (anthropicErr) {
-      console.warn(
-        "[chat] Anthropic unavailable, trying Gemini:",
-        anthropicErr instanceof Error ? anthropicErr.message : String(anthropicErr)
-      );
+// =============================================================================
+// SSE streaming response — emits text deltas as they arrive from Anthropic,
+// runs the agentic tool loop in-stream, ends with a sources event + done.
+// Event format (one line per event):
+//   data: {"type":"text","delta":"..."}
+//   data: {"type":"sources","sources":[...]}
+//   data: {"type":"error","message":"..."}
+//   data: {"type":"done"}
+// =============================================================================
+
+function streamAnthropicResponse(
+  message: string,
+  sources: ChatSource[],
+): Response {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (event: Record<string, unknown>) => {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+        );
+      };
 
       try {
-        const reply = await callGeminiDirect(fullMessage);
-        return NextResponse.json({ text: reply, sources });
-      } catch (geminiErr) {
-        console.warn(
-          "[chat] Gemini unavailable, trying OpenAI:",
-          geminiErr instanceof Error ? geminiErr.message : String(geminiErr)
-        );
-
-        try {
-          const reply = await callOpenAIDirect(fullMessage);
-          return NextResponse.json({ text: reply, sources });
-        } catch (openaiErr) {
-          console.error("[chat] All backends failed:", openaiErr);
-          return NextResponse.json(
-            { error: `${config.app.aiAssistantName} is currently unavailable. Try messaging him on Telegram: ${config.app.telegramBot}` },
-            { status: 503 }
-          );
+        await runAgenticStream(message, send);
+        if (sources.length > 0) {
+          send({ type: "sources", sources });
         }
+        send({ type: "done" });
+      } catch (err) {
+        console.error("[chat:stream] error:", err);
+        send({
+          type: "error",
+          message:
+            err instanceof Error
+              ? err.message
+              : `${config.app.aiAssistantName} ran into an issue. Try again in a moment.`,
+        });
+      } finally {
+        controller.close();
       }
-    }
-  }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
 
 // =============================================================================
@@ -583,61 +601,28 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function callOpenClawGateway(message: string): Promise<string> {
-  const res = await fetch(`${GATEWAY_URL}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(GATEWAY_TOKEN ? { Authorization: `Bearer ${GATEWAY_TOKEN}` } : {}),
-    },
-    body: JSON.stringify({
-      model: "openclaw:teddy",
-      messages: [
-        { role: "system", content: CHAT_SYSTEM_PROMPT },
-        { role: "user", content: message },
-      ],
-      max_tokens: 4096,
-    }),
-    signal: AbortSignal.timeout(15000),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Gateway returned ${res.status}`);
-  }
-
-  const data = await res.json();
-  const text = data?.choices?.[0]?.message?.content || "";
-
-  if (!text) {
-    throw new Error("Empty response from gateway");
-  }
-
-  return text;
-}
-
 // =============================================================================
-// Direct Anthropic SDK fallback
+// Anthropic streaming with agentic tool loop
 // =============================================================================
 
-async function callAnthropicDirect(message: string): Promise<string> {
+// Chat model: Haiku 4.5 is 2-3x faster than Sonnet with comparable quality
+// for grounded conversational answers. Override via ANTHROPIC_CHAT_MODEL.
+const CHAT_MODEL = process.env.ANTHROPIC_CHAT_MODEL || "claude-haiku-4-5";
+
+async function runAgenticStream(
+  message: string,
+  send: (event: Record<string, unknown>) => void,
+): Promise<void> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("No ANTHROPIC_API_KEY configured");
   }
 
-  // Dynamic import to avoid build errors when SDK isn't needed
   const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey, timeout: 60_000 });
+  const client = new Anthropic({ apiKey, timeout: 120_000 });
 
-  // ---------------------------------------------------------------------------
-  // Agentic tool use: Claude can call web_search (Anthropic server tool) and
-  // our custom query_hunting_database tool to get fresh data before answering.
-  // ---------------------------------------------------------------------------
   const tools: import("@anthropic-ai/sdk/resources").Tool[] = [
     {
-      // Custom tool: query our seeded structured data (hunt_units, draw_odds,
-      // harvest_stats, state_regulations). Use this BEFORE web_search for
-      // states/species we already have data for (currently: Nevada).
       name: "query_hunting_database",
       description:
         "Query the HuntLogic database for structured hunting data on a specific state and species. Returns hunt unit names, draw odds, harvest statistics, and any agency-published facts we have stored locally. Use this FIRST before web_search — it's faster and more authoritative than web results. Returns an empty result if we have no data for the requested state/species.",
@@ -658,11 +643,9 @@ async function callAnthropicDirect(message: string): Promise<string> {
       },
     },
     {
-      // Anthropic-provided server tool: web search.
-      // Model executes the search server-side, no client work needed.
       type: "web_search_20250305" as const,
       name: "web_search",
-      max_uses: 5,
+      max_uses: 2,
     } as unknown as import("@anthropic-ai/sdk/resources").Tool,
   ];
 
@@ -671,46 +654,36 @@ async function callAnthropicDirect(message: string): Promise<string> {
     { role: "user", content: message },
   ];
 
-  // Agentic loop — keep calling Claude until it returns a final text response
-  // (stop_reason !== "tool_use"). Hard cap at 6 iterations to prevent runaway.
-  let lastTextResponse = "";
-  for (let iteration = 0; iteration < 6; iteration++) {
-    const response = await client.messages.create({
-      model: config.ai.model,
-      max_tokens: 4096,
+  // Agentic loop. Hard cap at 4 iterations (was 6) — at Haiku speeds plus
+  // tighter tool-use rules, real answers complete in 1-2 iterations.
+  for (let iteration = 0; iteration < 4; iteration++) {
+    const stream = client.messages.stream({
+      model: CHAT_MODEL,
+      max_tokens: 1500,
       temperature: 0.7,
       system: CHAT_SYSTEM_PROMPT,
       tools,
       messages: conversationMessages,
     });
 
-    // Concatenate ALL text blocks from this response. The model may interleave
-    // text with server-tool calls (e.g. "Let me search..." [web_search] "Here's
-    // the plan...") — capturing only the first text block loses the real answer.
-    const allText = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => ("text" in b ? b.text : ""))
-      .join("\n\n")
-      .trim();
-    if (allText) {
-      lastTextResponse = allText;
-    }
-
-    if (response.stop_reason !== "tool_use") {
-      // Final answer (end_turn, max_tokens, stop_sequence, etc.)
-      return lastTextResponse || "Sorry, I couldn't generate a response.";
-    }
-
-    // Add the assistant turn (containing tool_use blocks) to the conversation
-    conversationMessages.push({
-      role: "assistant",
-      content: response.content,
+    // Stream text deltas to the client as they arrive.
+    stream.on("text", (textDelta) => {
+      if (textDelta) send({ type: "text", delta: textDelta });
     });
 
-    // Execute every tool_use block in this turn (skip server tools — Anthropic
-    // executes those itself; we only handle our custom client tools).
+    const finalMessage = await stream.finalMessage();
+
+    if (finalMessage.stop_reason !== "tool_use") {
+      return;
+    }
+
+    conversationMessages.push({
+      role: "assistant",
+      content: finalMessage.content,
+    });
+
     const toolResults: import("@anthropic-ai/sdk/resources").ToolResultBlockParam[] = [];
-    for (const block of response.content) {
+    for (const block of finalMessage.content) {
       if (block.type !== "tool_use") continue;
       if (block.name === "query_hunting_database") {
         const args = block.input as { state_code?: string; species_slug?: string };
@@ -724,22 +697,16 @@ async function callAnthropicDirect(message: string): Promise<string> {
           content: result,
         });
       }
-      // Server tools (web_search) are handled by Anthropic — no client action
     }
 
     if (toolResults.length === 0) {
-      // No client tools fired this turn (server tools only). Loop again so the
-      // model can see the server-side results and continue or finalize.
-      // The server tool results are already in `response.content`, so we just
-      // need to give the model an empty user turn to continue. Actually the
-      // model continues on its own — we should NOT add an empty turn. Break.
-      break;
+      // Only server tools fired (web_search) — they're already resolved
+      // inside finalMessage.content. The loop can exit safely.
+      return;
     }
 
     conversationMessages.push({ role: "user", content: toolResults });
   }
-
-  return lastTextResponse || "Sorry, I couldn't generate a response after tool use.";
 }
 
 // ---------------------------------------------------------------------------
@@ -798,90 +765,6 @@ async function executeQueryHuntingDatabase(
       hint: "Database query failed. Consider using web_search as a fallback.",
     });
   }
-}
-
-async function callOpenAIDirect(message: string): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("No OPENAI_API_KEY configured");
-  }
-
-  const { OpenAI } = await import("openai");
-  const client = new OpenAI({ apiKey, timeout: 20_000 });
-
-  const completion = await client.chat.completions.create({
-    model: process.env.OPENAI_MODEL || "gpt-4o",
-    messages: [
-      { role: "system", content: CHAT_SYSTEM_PROMPT },
-      { role: "user", content: message },
-    ],
-    max_tokens: 4096,
-    temperature: 0.7,
-  });
-
-  const text = completion.choices[0]?.message?.content || "";
-  if (!text) {
-    throw new Error("Empty response from OpenAI");
-  }
-
-  return text;
-}
-
-async function callGeminiDirect(message: string): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("No GEMINI_API_KEY configured");
-  }
-
-  const model = process.env.GEMINI_CHAT_MODEL || "gemini-2.5-flash";
-  if (!/^[\w.-]+$/.test(model)) {
-    throw new Error("Invalid GEMINI_CHAT_MODEL");
-  }
-  const systemPrompt = CHAT_SYSTEM_PROMPT;
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: systemPrompt }],
-        },
-        contents: [
-          {
-            role: "user",
-            parts: [{ text: message }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 4096,
-          thinkingConfig: { thinkingBudget: 0 },
-        },
-      }),
-      signal: AbortSignal.timeout(20000),
-    }
-  );
-
-  if (!res.ok) {
-    throw new Error(`Gemini ${res.status}: ${await res.text()}`);
-  }
-
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts
-    ?.map((part: { text?: string }) => part.text || "")
-    .join("")
-    .trim();
-
-  if (!text) {
-    throw new Error("Empty response from Gemini");
-  }
-
-  return text;
 }
 
 export async function GET() {

@@ -11,10 +11,11 @@ interface Message {
   sources?: ChatSource[];
 }
 
-interface ChatResponse {
-  text?: string;
-  sources?: ChatSource[];
-}
+type StreamEvent =
+  | { type: "text"; delta: string }
+  | { type: "sources"; sources: ChatSource[] }
+  | { type: "error"; message: string }
+  | { type: "done" };
 
 const aiName = process.env.NEXT_PUBLIC_AI_ASSISTANT_NAME || "Grizz";
 
@@ -70,33 +71,78 @@ export function ChatContainer() {
           body: JSON.stringify({ message: content, history }),
         });
 
-        const data: ChatResponse | { error?: string } | null = await res
-          .json()
-          .catch(() => null);
-
-        if (!res.ok) {
-          throw new Error(
-            (data && "error" in data && data.error) || `HTTP ${res.status}`,
-          );
+        if (!res.ok || !res.body) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const errBody = await res.json();
+            if (errBody && typeof errBody.error === "string") detail = errBody.error;
+          } catch {}
+          throw new Error(detail);
         }
 
-        // Update assistant message with Grizz's response and attach any
-        // source citations the backend collected.
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? {
-                  ...m,
-                  content:
-                    data && "text" in data && data.text
-                      ? data.text
-                      : "Sorry, I didn't get a response.",
-                  sources:
-                    data && "sources" in data ? data.sources : undefined,
-                }
-              : m,
-          ),
-        );
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let accumulatedText = "";
+        let streamError: string | null = null;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE frames are separated by a blank line.
+          let frameEnd = buffer.indexOf("\n\n");
+          while (frameEnd !== -1) {
+            const frame = buffer.slice(0, frameEnd);
+            buffer = buffer.slice(frameEnd + 2);
+            frameEnd = buffer.indexOf("\n\n");
+
+            const dataLine = frame
+              .split("\n")
+              .find((l) => l.startsWith("data:"));
+            if (!dataLine) continue;
+            let event: StreamEvent;
+            try {
+              event = JSON.parse(dataLine.slice(5).trim()) as StreamEvent;
+            } catch {
+              continue;
+            }
+
+            if (event.type === "text") {
+              accumulatedText += event.delta;
+              const snapshot = accumulatedText;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, content: snapshot } : m,
+                ),
+              );
+            } else if (event.type === "sources") {
+              const incoming = event.sources;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, sources: incoming } : m,
+                ),
+              );
+            } else if (event.type === "error") {
+              streamError = event.message;
+            }
+          }
+        }
+
+        if (streamError) {
+          throw new Error(streamError);
+        }
+
+        if (!accumulatedText.trim()) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: "Sorry, I didn't get a response." }
+                : m,
+            ),
+          );
+        }
       } catch (err: unknown) {
         const errorMessage =
           err instanceof Error ? err.message : "Please try again.";
