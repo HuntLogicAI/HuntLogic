@@ -85,7 +85,9 @@ export {
 // Regulations domain
 export {
   stateRegulations,
+  stateRegulationRules,
   stateRegulationsRelations,
+  stateRegulationRulesRelations,
 } from "./regulations";
 
 // Outfitters domain
