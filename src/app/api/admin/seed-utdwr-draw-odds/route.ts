@@ -14,7 +14,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { eq, sql as drizzleSql } from "drizzle-orm";
+import { eq, sql as drizzleSql, and } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { states, species, huntUnits, drawOdds, dataSources } from "@/lib/db/schema";
 
@@ -123,7 +123,6 @@ async function handlePost(request: NextRequest) {
       .returning({ id: dataSources.id });
     sourceId = inserted.id;
   }
-  void sourceId; // reserved for future parser inserts
 
   const { extractText, getDocumentProxy } = await import("unpdf");
 
@@ -168,16 +167,225 @@ async function handlePost(request: NextRequest) {
         result.textLength = fullText.length;
       }
 
-      // Placeholder parser: UT format is TBD until we see the actual PDF text.
-      // For now, just report textLength + sample so we can build the regex
-      // based on real format.
-      result.parsedRecords = 0;
-      result.qualityScore = 0;
+      // UTDWR per-hunt parser.
+      //
+      // Each hunt block starts with "Hunt: HUNTCODE description". HUNTCODE
+      // is 2 letters + 4 digits (DB1000, EB1234, etc.). Description names
+      // the species explicitly (Buck Deer, Bull Elk, Antelope, etc.) plus
+      // the hunt area.
+      //
+      // Within each block, point-level rows are side-by-side:
+      //   pts res_apps res_bonus res_regular res_total res_ratio  pts nr_apps nr_bonus nr_regular nr_total nr_ratio
+      // followed by a "Totals" row.
+      //
+      // We emit one draw_odds row per (hunt × residency). min_points_drawn
+      // = highest point level where the residency drew > 0 total permits.
+      // total_applicants / total_tags come from the Totals row.
 
-      // Touch unused imports
-      void huntUnits;
-      void drawOdds;
-      void speciesId(result, target.speciesSlug, speciesMap);
+      const HUNT_HEADER_RE =
+        /Hunt:\s+([A-Z]{2}\d{4})\s+([^\n]+?)(?=\s+Page\s+\d+|\n|$)/g;
+
+      // Species detection from the description text
+      function detectSpecies(description: string): string | null {
+        const d = description.toLowerCase();
+        if (d.includes("elk")) return "elk";
+        if (d.includes("antelope") || d.includes("pronghorn")) return "pronghorn";
+        if (d.includes("moose")) return "moose";
+        if (d.includes("sheep") || d.includes("bighorn")) return "bighorn_sheep";
+        if (d.includes("goat")) return "mountain_goat";
+        if (d.includes("bison") || d.includes("buffalo")) return "bison";
+        if (d.includes("deer")) return "mule_deer";
+        if (d.includes("bear")) return "black_bear";
+        return null;
+      }
+
+      function detectWeapon(description: string): string | null {
+        const d = description.toLowerCase();
+        if (d.includes("archery") || d.includes("- archery")) return "archery";
+        if (d.includes("muzzleloader")) return "muzzleloader";
+        if (d.includes("any legal weapon") || d.includes("alw") || d.includes("rifle"))
+          return "rifle";
+        return null;
+      }
+
+      // Each row in the side-by-side table:
+      //   pts res_apps res_bonus res_regular res_total res_ratio  pts nr_apps nr_bonus nr_regular nr_total nr_ratio
+      // Ratio is "1 in N.N" or "N/A"
+      // Be flexible: the ratio may be split into "1 in" and "N.N" by whitespace, or "N/A".
+      const ROW_RE =
+        /(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(?:1\s+in\s+[\d.]+|N\/A|in\s+[\d.]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(?:1\s+in\s+[\d.]+|N\/A|in\s+[\d.]+)/g;
+
+      // Find all hunt headers + the text up to the next header
+      const huntMatches: Array<{ code: string; description: string; startIdx: number }> = [];
+      let hMatch: RegExpExecArray | null;
+      while ((hMatch = HUNT_HEADER_RE.exec(fullText)) !== null) {
+        huntMatches.push({
+          code: hMatch[1],
+          description: hMatch[2].trim(),
+          startIdx: hMatch.index,
+        });
+      }
+
+      result.parsedRecords = huntMatches.length;
+      let withData = 0;
+
+      for (let i = 0; i < huntMatches.length; i++) {
+        const current = huntMatches[i];
+        const nextIdx = i + 1 < huntMatches.length ? huntMatches[i + 1].startIdx : fullText.length;
+        const block = fullText.slice(current.startIdx, nextIdx);
+
+        const huntSpeciesSlug = detectSpecies(current.description);
+        if (!huntSpeciesSlug) continue;
+        if (target.speciesSlug && huntSpeciesSlug !== target.speciesSlug) continue;
+        // Filter to species we actually have in the DB
+        const huntSpeciesId = speciesMap.get(huntSpeciesSlug);
+        if (!huntSpeciesId) continue;
+
+        const weaponType = detectWeapon(current.description);
+
+        // Parse all the per-point-level rows
+        const rows: Array<{
+          points: number;
+          resApps: number;
+          resTotal: number;
+          nrApps: number;
+          nrTotal: number;
+        }> = [];
+        ROW_RE.lastIndex = 0;
+        let rMatch: RegExpExecArray | null;
+        while ((rMatch = ROW_RE.exec(block)) !== null) {
+          rows.push({
+            points: parseInt(rMatch[1], 10),
+            resApps: parseInt(rMatch[2], 10),
+            resTotal: parseInt(rMatch[5], 10),
+            nrApps: parseInt(rMatch[7], 10),
+            nrTotal: parseInt(rMatch[11], 10),
+          });
+        }
+
+        if (rows.length === 0) continue;
+        withData++;
+
+        // Aggregate to find min_points_drawn (highest pts with > 0 permits)
+        // and totals (sum of all rows for each residency).
+        let resMinPoints: number | null = null;
+        let nrMinPoints: number | null = null;
+        let resTotalApps = 0;
+        let nrTotalApps = 0;
+        let resTotalTags = 0;
+        let nrTotalTags = 0;
+        for (const r of rows) {
+          resTotalApps += r.resApps;
+          nrTotalApps += r.nrApps;
+          resTotalTags += r.resTotal;
+          nrTotalTags += r.nrTotal;
+          if (r.resTotal > 0 && (resMinPoints === null || r.points > resMinPoints))
+            resMinPoints = r.points;
+          if (r.nrTotal > 0 && (nrMinPoints === null || r.points > nrMinPoints))
+            nrMinPoints = r.points;
+        }
+
+        // Use hunt code as unit_code; preserve description as unit_name
+        const unitCode = current.code;
+        let huntUnitId: string | null = null;
+        const [existingUnit] = await db
+          .select({ id: huntUnits.id })
+          .from(huntUnits)
+          .where(
+            and(
+              eq(huntUnits.stateId, utState.id),
+              eq(huntUnits.speciesId, huntSpeciesId),
+              eq(huntUnits.unitCode, unitCode),
+            ),
+          )
+          .limit(1);
+        if (existingUnit) {
+          huntUnitId = existingUnit.id;
+        } else {
+          try {
+            const [created] = await db
+              .insert(huntUnits)
+              .values({
+                stateId: utState.id,
+                speciesId: huntSpeciesId,
+                unitCode,
+                unitName: `${unitCode} — ${current.description.slice(0, 100)}`,
+              })
+              .returning({ id: huntUnits.id });
+            huntUnitId = created.id;
+            result.huntUnitsCreated++;
+          } catch {
+            const [reread] = await db
+              .select({ id: huntUnits.id })
+              .from(huntUnits)
+              .where(
+                and(
+                  eq(huntUnits.stateId, utState.id),
+                  eq(huntUnits.speciesId, huntSpeciesId),
+                  eq(huntUnits.unitCode, unitCode),
+                ),
+              )
+              .limit(1);
+            if (reread) huntUnitId = reread.id;
+          }
+        }
+
+        const residencies = [
+          {
+            residentType: "resident",
+            totalApps: resTotalApps,
+            totalTags: resTotalTags,
+            minPoints: resMinPoints,
+          },
+          {
+            residentType: "nonresident",
+            totalApps: nrTotalApps,
+            totalTags: nrTotalTags,
+            minPoints: nrMinPoints,
+          },
+        ];
+
+        for (const r of residencies) {
+          try {
+            const insertResult = await db
+              .insert(drawOdds)
+              .values({
+                stateId: utState.id,
+                speciesId: huntSpeciesId,
+                huntUnitId,
+                year: TARGET_YEAR,
+                residentType: r.residentType,
+                weaponType,
+                choiceRank: 1,
+                totalApplicants: r.totalApps,
+                totalTags: r.totalTags,
+                minPointsDrawn: r.minPoints,
+                drawRate: r.totalApps > 0 ? r.totalTags / r.totalApps : null,
+                sourceId,
+                rawData: {
+                  parser: "utdwr-side-by-side-inline",
+                  huntCode: current.code,
+                  description: current.description,
+                  speciesSlug: huntSpeciesSlug,
+                  weaponType,
+                  rowCount: rows.length,
+                },
+              })
+              .onConflictDoNothing();
+            const rowsAffected = (insertResult as unknown as { rowCount?: number }).rowCount ?? 1;
+            if (rowsAffected > 0) result.inserted++;
+            else result.conflictsSkipped++;
+          } catch (insertErr) {
+            const msg = insertErr instanceof Error ? insertErr.message : String(insertErr);
+            if (msg.includes("duplicate") || msg.includes("conflict")) result.conflictsSkipped++;
+            else result.errors.push(`Insert err on ${current.code}: ${msg}`);
+          }
+        }
+      }
+
+      result.qualityScore = huntMatches.length > 0
+        ? Math.round((withData / huntMatches.length) * 100)
+        : 0;
     } catch (err) {
       result.errors.push(`Top-level error: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -207,15 +415,6 @@ async function handlePost(request: NextRequest) {
   });
 }
 
-// Helper that resolves species, currently a no-op stub for the placeholder
-// parser. Will be wired up to the parser once we see UT's PDF format.
-function speciesId(
-  _result: PerPdfResult,
-  _speciesSlug: string | null,
-  _speciesMap: Map<string, string>,
-): string | null {
-  return null;
-}
 
 export async function GET() {
   const [utState] = await db.select({ id: states.id }).from(states).where(eq(states.code, "UT")).limit(1);
