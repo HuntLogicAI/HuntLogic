@@ -53,7 +53,7 @@ const PA_RULES: RuleSeed[] = [
     },
   },
   { ruleType: "baiting_legal", species: "whitetail", value: { legal: false, reason: "PA prohibits hunting deer over bait" } },
-  { ruleType: "baiting_legal", species: "black-bear", value: { legal: false, reason: "PA prohibits hunting bear over bait" } },
+  { ruleType: "baiting_legal", species: "black_bear", value: { legal: false, reason: "PA prohibits hunting bear over bait" } },
   {
     ruleType: "crossbow_during_archery",
     value: { legal: true, all_hunters: true, note: "Crossbow is legal during archery season for all hunters in PA" },
@@ -152,12 +152,12 @@ const WI_RULES: RuleSeed[] = [
   },
   {
     ruleType: "baiting_legal",
-    species: "black-bear",
+    species: "black_bear",
     value: { legal: true, restrictions: ["state-licensed bait sites only"] },
   },
   {
     ruleType: "hounding_legal",
-    species: "black-bear",
+    species: "black_bear",
     value: { legal: true, restrictions: ["hound training season + regular hunt season"] },
   },
   { ruleType: "crossbow_during_archery", value: { legal: true, all_hunters: true } },
@@ -209,7 +209,7 @@ const MI_RULES: RuleSeed[] = [
   },
   {
     ruleType: "hounding_legal",
-    species: "black-bear",
+    species: "black_bear",
     value: { legal: true, restrictions: ["zone-specific permits, season-specific"] },
   },
   { ruleType: "crossbow_during_archery", value: { legal: true, all_hunters: true } },
@@ -274,10 +274,10 @@ const TX_RULES: RuleSeed[] = [
     species: "whitetail",
     value: { legal: true, note: "Baiting and feeders are standard practice in TX deer hunting" },
   },
-  { ruleType: "baiting_legal", species: "feral-hog", value: { legal: true } },
+  { ruleType: "baiting_legal", species: "hogs", value: { legal: true } },
   {
     ruleType: "night_hunting_legal",
-    species: "feral-hog",
+    species: "hogs",
     value: { legal: true, with_artificial_light: true, note: "Year-round nightly hog hunting legal on private with landowner consent" },
   },
   { ruleType: "crossbow_during_archery", value: { legal: true, all_hunters: true } },
@@ -296,7 +296,7 @@ const TX_RULES: RuleSeed[] = [
   },
   {
     ruleType: "bag_limit_season",
-    species: "feral-hog",
+    species: "hogs",
     value: { limit: null, note: "No closed season, no bag limit on feral hog with valid hunting license on private land" },
   },
   { ruleType: "non_toxic_shot_required", value: { required: true, applies_to: ["waterfowl"] } },
@@ -367,7 +367,7 @@ const WY_RULES: RuleSeed[] = [
   { ruleType: "baiting_legal", species: "elk", value: { legal: false, reason: "Baiting prohibited for big game" } },
   {
     ruleType: "baiting_legal",
-    species: "black-bear",
+    species: "black_bear",
     value: { legal: true, restrictions: ["state-licensed bait sites only, registration required"] },
   },
   {
@@ -425,9 +425,9 @@ const UT_RULES: RuleSeed[] = [
     seasonType: "firearm",
     value: { required: true, color: "hunter_orange", min_sq_inches: 400, placement: "above the waist, visible from all sides" },
   },
-  { ruleType: "bag_limit_lifetime", species: "bighorn-sheep", value: { limit: 1, lifetime: true, note: "Rocky Mountain bighorn is once-in-a-lifetime in UT" } },
+  { ruleType: "bag_limit_lifetime", species: "bighorn_sheep", value: { limit: 1, lifetime: true, note: "Rocky Mountain bighorn is once-in-a-lifetime in UT" } },
   { ruleType: "bag_limit_lifetime", species: "moose", value: { limit: 1, lifetime: true, note: "Shiras moose is once-in-a-lifetime in UT" } },
-  { ruleType: "bag_limit_lifetime", species: "mountain-goat", value: { limit: 1, lifetime: true, note: "Rocky Mountain goat is once-in-a-lifetime in UT" } },
+  { ruleType: "bag_limit_lifetime", species: "mountain_goat", value: { limit: 1, lifetime: true, note: "Rocky Mountain goat is once-in-a-lifetime in UT" } },
   { ruleType: "non_toxic_shot_required", value: { required: true, applies_to: ["waterfowl"] } },
 ];
 
@@ -463,7 +463,7 @@ const NV_RULES: RuleSeed[] = [
   },
   {
     ruleType: "bag_limit_lifetime",
-    species: "bighorn-sheep",
+    species: "bighorn_sheep",
     value: { limit: 1, lifetime: true, note: "Each bighorn subspecies (California, desert, Rocky Mountain) is separate lifetime tag" },
   },
   { ruleType: "non_toxic_shot_required", value: { required: true, applies_to: ["waterfowl"] } },
