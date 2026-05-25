@@ -32,11 +32,15 @@ interface CpwPdfTarget {
   label: string;
 }
 
+// We use the "Drawn Out At" reports which list, per hunt code, the last
+// point/choice at which a license was drawn. That's the per-hunt-code
+// data we need to populate draw_odds. The other CPW report (Post Draw
+// Recap) is a statewide summary and not unit-specific.
 const CPW_PDFS: CpwPdfTarget[] = [
-  { url: "https://cpw.widen.net/s/qh6nqttnnz/postdrawrecapreport_elk-25_05172025_0612", speciesSlug: "elk", label: "CO Post Draw Recap — Elk 2025" },
-  { url: "https://cpw.widen.net/s/r9bjfnqlbc/postdrawrecapreport_deer-25_05102025_1540", speciesSlug: "mule_deer", label: "CO Post Draw Recap — Deer 2025" },
-  { url: "https://cpw.widen.net/s/t6tnqjg55q/postdrawrecapreport_prong-25_05222025_0816", speciesSlug: "pronghorn", label: "CO Post Draw Recap — Pronghorn 2025" },
-  { url: "https://cpw.widen.net/s/7qvlbxgdl7/postdrawrecapreport_moose-25_05072025_1354", speciesSlug: "moose", label: "CO Post Draw Recap — Moose 2025" },
+  { url: "https://cpw.widen.net/s/xvrbwnvmj7/postdrawnoutreport_elk-25_05172025_0631", speciesSlug: "elk", label: "CO Drawn Out At — Elk 2025" },
+  { url: "https://cpw.widen.net/s/m8z9plcffl/postdrawnoutreport_deer-25_05102025_1558", speciesSlug: "mule_deer", label: "CO Drawn Out At — Deer 2025" },
+  { url: "https://cpw.widen.net/s/sxx8pgzwlx/postdrawnoutreport_prong-25_05222025_0821", speciesSlug: "pronghorn", label: "CO Drawn Out At — Pronghorn 2025" },
+  { url: "https://cpw.widen.net/s/khs2xjlncn/postdrawnoutreport_moose-25_05072025_1355", speciesSlug: "moose", label: "CO Drawn Out At — Moose 2025" },
 ];
 
 const TARGET_YEAR = 2025;
