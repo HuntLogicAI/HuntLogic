@@ -25,6 +25,11 @@ const PUBLIC_PREFIXES = [
   "/api/chat",
   "/api/health",
   "/api/webhooks",
+  // Admin maintenance endpoints — bypass the session-auth middleware so
+  // they can be hit with a CRON_SECRET Bearer token from outside the app
+  // (curl from a laptop, GitHub Actions, etc). Each route is responsible
+  // for verifying the secret itself.
+  "/api/admin",
   "/api/v1/deadlines",
   "/api/v1/regulations",
   "/api/v1/explore",
