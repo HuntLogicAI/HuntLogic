@@ -27,6 +27,16 @@ import {
   dataSources,
 } from "@/lib/db/schema";
 
+// pdf-parse v2 uses pdfjs-dist which needs browser globals (DOMMatrix,
+// Path2D, ImageData) that Node serverless runtimes don't have. Stub them
+// with empty classes — pdf-parse only references their existence during
+// import; we never actually render images or paths from these PDFs (text
+// extraction only).
+const g = globalThis as unknown as Record<string, unknown>;
+if (typeof g.DOMMatrix === "undefined") g.DOMMatrix = class DOMMatrix {};
+if (typeof g.Path2D === "undefined") g.Path2D = class Path2D {};
+if (typeof g.ImageData === "undefined") g.ImageData = class ImageData {};
+
 export const runtime = "nodejs";
 // PDF parsing + multiple fetches can be slow. Vercel Pro max.
 export const maxDuration = 300;
