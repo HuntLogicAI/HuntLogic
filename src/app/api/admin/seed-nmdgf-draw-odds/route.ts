@@ -156,37 +156,97 @@ async function handlePost(request: NextRequest) {
       return NextResponse.json({ ok: true, perRun: result, elapsedMs: Date.now() - startedAt });
     }
 
-    // Heuristic column resolver — NMDGF column names vary by sheet
-    function pickCol(row: SheetRow, candidates: string[]): unknown {
-      for (const candidate of candidates) {
-        for (const key of Object.keys(row)) {
-          if (key.toLowerCase().includes(candidate.toLowerCase())) return row[key];
-        }
+    // Known column layout (discovered from debug=1):
+    //   Col 0 (first key)       = Hunt Code (e.g. "ANT-1-101") OR section header
+    //                             (e.g. "PRONGHORN" — sets current species)
+    //   __EMPTY                  = Unit/Description text
+    //   __EMPTY_1                = Bag type (ES, MB, ML, etc.)
+    //   __EMPTY_2                = Licenses (quota / total tags)
+    //   __EMPTY_3..6             = Hunt Total applicants: 1st, 2nd, 3rd, T
+    //   __EMPTY_7..10            = Resident applicants: 1st, 2nd, 3rd, T
+    //   __EMPTY_11..14           = Non-Resident applicants: 1st, 2nd, 3rd, T
+    //   __EMPTY_15..18           = Outfitter applicants: 1st, 2nd, 3rd, T
+    //   __EMPTY_20               = Hunt Code (repeated on right half — distribution)
+    //   __EMPTY_22               = Licenses
+    //   __EMPTY_23               = Resident drawn count
+    //   __EMPTY_24               = Non-Resident drawn count
+    //   __EMPTY_25               = Outfitter drawn count
+    //   __EMPTY_26               = Total drawn
+    //
+    // Hunt code prefix tells us the species directly. Map:
+    const HUNT_PREFIX_TO_SPECIES: Record<string, string> = {
+      ANT: "pronghorn",
+      DEE: "mule_deer",
+      DER: "mule_deer",
+      DRC: "mule_deer", // deer central
+      DRN: "mule_deer",
+      DRS: "mule_deer",
+      ELK: "elk",
+      EHC: "elk",
+      EHA: "elk",
+      EHM: "elk",
+      EHN: "elk",
+      EHB: "elk",
+      IBE: "ibex",
+      ORY: "oryx",
+      BBS: "barbary_sheep",
+      BIG: "bighorn_sheep",
+      BHS: "bighorn_sheep",
+      MTG: "mountain_goat",
+      JAV: "javelina",
+      TUR: "turkey",
+      BEA: "black_bear",
+      BLB: "black_bear",
+      BSN: "bison",
+      BIS: "bison",
+    };
+
+    const FIRST_COL_KEY = "2024-25 Big-Game Drawing Odds Summary";
+    let currentSpeciesSlug: string | null = null;
+
+    function toNum(v: unknown): number | null {
+      if (typeof v === "number" && !Number.isNaN(v)) return v;
+      if (typeof v === "string") {
+        const n = parseFloat(v);
+        return Number.isNaN(n) ? null : n;
       }
       return null;
     }
+    const safeInt = (n: number | null): number | null =>
+      n == null || Number.isNaN(n) ? null : Math.trunc(n);
 
     for (const row of allRows) {
-      const description =
-        (pickCol(row, ["hunt", "description", "name"]) as string) ||
-        ((row as { _sheet?: string })._sheet ?? "");
-      const speciesSlug = detectSpecies(description);
+      const firstCol = String((row as Record<string, unknown>)[FIRST_COL_KEY] ?? "").trim();
+      if (!firstCol) continue;
+
+      // Section header rows (e.g. "PRONGHORN") update currentSpeciesSlug
+      // and have no data.
+      const sectionSpecies = detectSpecies(firstCol);
+      if (sectionSpecies && !firstCol.includes("-")) {
+        currentSpeciesSlug = sectionSpecies;
+        continue;
+      }
+
+      // Hunt code rows look like "ANT-1-101"
+      const huntCodeMatch = firstCol.match(/^([A-Z]{3,4})-(\d+)-(\d+)$/);
+      if (!huntCodeMatch) continue;
+
+      const prefix = huntCodeMatch[1];
+      const speciesSlug =
+        HUNT_PREFIX_TO_SPECIES[prefix] ?? currentSpeciesSlug;
       if (!speciesSlug) continue;
       const huntSpeciesId = speciesMap.get(speciesSlug);
       if (!huntSpeciesId) continue;
 
-      const unitCode = String(pickCol(row, ["gmu", "unit", "area"]) ?? "").trim();
-      if (!unitCode || unitCode.length > 50) continue;
+      const description = String((row as Record<string, unknown>).__EMPTY ?? "").trim();
+      const bagType = String((row as Record<string, unknown>).__EMPTY_1 ?? "").trim();
+      const totalTags = safeInt(toNum((row as Record<string, unknown>).__EMPTY_2));
+      const resApplicants = safeInt(toNum((row as Record<string, unknown>).__EMPTY_7)); // 1st choice res
+      const nrApplicants = safeInt(toNum((row as Record<string, unknown>).__EMPTY_11)); // 1st choice NR
+      const resDrawn = safeInt(toNum((row as Record<string, unknown>).__EMPTY_23));
+      const nrDrawn = safeInt(toNum((row as Record<string, unknown>).__EMPTY_24));
 
-      const totalApplicantsRaw = pickCol(row, ["applicant", "applicants"]);
-      const totalTagsRaw = pickCol(row, ["permits", "tags", "licenses", "drawn"]);
-      const totalApplicants = typeof totalApplicantsRaw === "number"
-        ? totalApplicantsRaw
-        : parseInt(String(totalApplicantsRaw ?? ""), 10) || null;
-      const totalTags = typeof totalTagsRaw === "number"
-        ? totalTagsRaw
-        : parseInt(String(totalTagsRaw ?? ""), 10) || null;
-
+      const unitCode = firstCol; // hunt code as unit code
       let huntUnitId: string | null = null;
       const [existingUnit] = await db
         .select({ id: huntUnits.id })
@@ -209,7 +269,7 @@ async function handlePost(request: NextRequest) {
               stateId: nmState.id,
               speciesId: huntSpeciesId,
               unitCode,
-              unitName: `GMU ${unitCode} — ${description.slice(0, 100)}`,
+              unitName: `${unitCode} — ${description.slice(0, 100)} [${bagType}]`,
             })
             .returning({ id: huntUnits.id });
           huntUnitId = created.id;
@@ -230,37 +290,48 @@ async function handlePost(request: NextRequest) {
         }
       }
 
-      const safeInt = (n: unknown): number | null =>
-        typeof n === "number" && !Number.isNaN(n) ? Math.trunc(n) : null;
-      const apps = safeInt(totalApplicants);
-      const tags = safeInt(totalTags);
-      const drawRate = apps != null && apps > 0 && tags != null ? tags / apps : null;
-
-      try {
-        const insertResult = await db
-          .insert(drawOdds)
-          .values({
-            stateId: nmState.id,
-            speciesId: huntSpeciesId,
-            huntUnitId,
-            year: TARGET_YEAR,
-            residentType: "nonresident",
-            weaponType: null,
-            choiceRank: 1,
-            totalApplicants: apps,
-            totalTags: tags,
-            drawRate,
-            sourceId,
-            rawData: { parser: "nmdgf-xlsx-inline", description, unitCode, row },
-          })
-          .onConflictDoNothing();
-        const rowsAffected = (insertResult as unknown as { rowCount?: number }).rowCount ?? 1;
-        if (rowsAffected > 0) result.inserted++;
-        else result.conflictsSkipped++;
-      } catch (insertErr) {
-        const msg = insertErr instanceof Error ? insertErr.message : String(insertErr);
-        if (msg.includes("duplicate") || msg.includes("conflict")) result.conflictsSkipped++;
-        else result.errors.push(`Insert err on ${unitCode}: ${msg}`);
+      // Insert one row per residency
+      const residencies = [
+        { residentType: "resident", apps: resApplicants, tags: resDrawn },
+        { residentType: "nonresident", apps: nrApplicants, tags: nrDrawn },
+      ];
+      for (const r of residencies) {
+        const drawRate =
+          r.apps != null && r.apps > 0 && r.tags != null ? r.tags / r.apps : null;
+        try {
+          const insertResult = await db
+            .insert(drawOdds)
+            .values({
+              stateId: nmState.id,
+              speciesId: huntSpeciesId,
+              huntUnitId,
+              year: TARGET_YEAR,
+              residentType: r.residentType,
+              weaponType: null,
+              choiceRank: 1,
+              totalApplicants: r.apps,
+              totalTags: r.tags,
+              drawRate,
+              sourceId,
+              rawData: {
+                parser: "nmdgf-xlsx-inline",
+                huntCode: unitCode,
+                description,
+                bagType,
+                totalTagsQuota: totalTags,
+              },
+            })
+            .onConflictDoNothing();
+          const rowsAffected =
+            (insertResult as unknown as { rowCount?: number }).rowCount ?? 1;
+          if (rowsAffected > 0) result.inserted++;
+          else result.conflictsSkipped++;
+        } catch (insertErr) {
+          const msg = insertErr instanceof Error ? insertErr.message : String(insertErr);
+          if (msg.includes("duplicate") || msg.includes("conflict"))
+            result.conflictsSkipped++;
+          else result.errors.push(`Insert err on ${unitCode}: ${msg}`);
+        }
       }
     }
   } catch (err) {
