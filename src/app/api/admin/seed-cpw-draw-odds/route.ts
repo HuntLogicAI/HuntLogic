@@ -148,13 +148,35 @@ async function handlePost(request: NextRequest) {
       }
       const speciesId = speciesRow.id;
 
-      const fetchRes = await fetch(target.url, {
+      // CPW publishes via Widen CDN. The /s/ URL returns an HTML viewer wrapper,
+      // not the PDF binary. Scrape the viewer page to find the actual /content/
+      // download URL, then fetch that.
+      const wrapperRes = await fetch(target.url, {
+        headers: { "User-Agent": "Mozilla/5.0 HuntLogic/1.0" },
+        redirect: "follow",
+      });
+      if (!wrapperRes.ok) {
+        result.httpStatus = wrapperRes.status;
+        result.errors.push(`HTTP ${wrapperRes.status} fetching wrapper page`);
+        results.push(result);
+        continue;
+      }
+      const wrapperHtml = await wrapperRes.text();
+      const pdfMatch = wrapperHtml.match(/href="(\/content\/[^"]*\.pdf[^"]*)"/);
+      const pdfPath = pdfMatch ? pdfMatch[1].replace(/&amp;/g, "&") : null;
+      if (!pdfPath) {
+        result.errors.push("Could not find PDF download path in Widen wrapper page");
+        results.push(result);
+        continue;
+      }
+      const pdfUrl = `https://cpw.widen.net${pdfPath}`;
+      const fetchRes = await fetch(pdfUrl, {
         headers: { "User-Agent": "Mozilla/5.0 HuntLogic/1.0" },
         redirect: "follow",
       });
       result.httpStatus = fetchRes.status;
       if (!fetchRes.ok) {
-        result.errors.push(`HTTP ${fetchRes.status} fetching PDF`);
+        result.errors.push(`HTTP ${fetchRes.status} fetching actual PDF`);
         results.push(result);
         continue;
       }
