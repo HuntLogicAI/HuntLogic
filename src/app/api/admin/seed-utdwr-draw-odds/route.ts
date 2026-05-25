@@ -347,7 +347,19 @@ async function handlePost(request: NextRequest) {
           },
         ];
 
+        // Defensive: never let a NaN slip into an integer/real column.
+        const safeInt = (n: number | null | undefined): number | null =>
+          n == null || Number.isNaN(n) ? null : Math.trunc(n);
+        const safeReal = (n: number | null | undefined): number | null =>
+          n == null || Number.isNaN(n) || !Number.isFinite(n) ? null : n;
+
         for (const r of residencies) {
+          const safeApps = safeInt(r.totalApps);
+          const safeTags = safeInt(r.totalTags);
+          const rawRate =
+            safeApps != null && safeApps > 0 && safeTags != null
+              ? safeTags / safeApps
+              : null;
           try {
             const insertResult = await db
               .insert(drawOdds)
@@ -359,10 +371,10 @@ async function handlePost(request: NextRequest) {
                 residentType: r.residentType,
                 weaponType,
                 choiceRank: 1,
-                totalApplicants: r.totalApps,
-                totalTags: r.totalTags,
-                minPointsDrawn: r.minPoints,
-                drawRate: r.totalApps > 0 ? r.totalTags / r.totalApps : null,
+                totalApplicants: safeApps,
+                totalTags: safeTags,
+                minPointsDrawn: safeInt(r.minPoints),
+                drawRate: safeReal(rawRate),
                 sourceId,
                 rawData: {
                   parser: "utdwr-side-by-side-inline",
