@@ -208,8 +208,6 @@ async function handlePost(request: NextRequest) {
       const { text } = await extractText(pdf, { mergePages: true });
       const fullText = Array.isArray(text) ? text.join("\n") : (text as string);
 
-      // In debug mode, attach a sample of extracted text so we can see what
-      // format WGFD is publishing without grinding through more deploys.
       if (debug) {
         (result as PerPdfResult & { textSample?: string; textLength?: number }).textSample =
           fullText.slice(0, 2500);
@@ -217,40 +215,92 @@ async function handlePost(request: NextRequest) {
           fullText.length;
       }
 
-      // Parse table
-      const parsed = await drawParser.parse(fullText, {
-        state_code: "WY",
-        species_slug: target.speciesSlug,
-        year: TARGET_YEAR,
-        column_mappings: {
-          unit: 0,
-          weapon_type: 1,
-          species: 2,
-          total_tags: 3,
-          total_applicants: 4,
-        },
-      });
-      result.parsedRecords = parsed.records.length;
-      result.qualityScore = parsed.qualityScore;
+      // WGFD "Demand Report" custom parser. Format (one row per line):
+      //   AAA T description... QQQQ FIRST SECOND THIRD
+      // where:
+      //   AAA = 3-digit hunt area code (e.g. "001", "022", "100")
+      //   T   = 1-digit hunt type (1=any, 2=antlered, 3=cow, 4=antlerless,
+      //         5=antlerless w/ archery, 9=archery-only, etc.)
+      //   description = variable-length text ("ANY ELK", "ANTLERLESS ELK",
+      //         "ANY ELK, ARCHERY ONLY", possibly truncated)
+      //   QQQQ = tag quota (integer)
+      //   FIRST / SECOND / THIRD = number of applicants who picked this hunt
+      //         as their 1st / 2nd / 3rd choice
+      //
+      // We compute draw_rate = quota / max(first_choice, 1). It's an
+      // approximation: the real WGFD process honors first choices before
+      // second/third, so this matches what most "1st choice draw odds"
+      // calculators show.
+      const HUNT_TYPE_TO_WEAPON: Record<string, string | null> = {
+        "1": null,           // any weapon
+        "2": null,           // antlered (any weapon)
+        "3": null,           // cow (any weapon)
+        "4": null,           // antlerless (any weapon)
+        "5": null,           // antlerless (any weapon, sometimes archery)
+        "6": "muzzleloader",
+        "7": "muzzleloader",
+        "8": "muzzleloader",
+        "9": "archery",
+        "0": "archery",
+      };
+      // Match: 3-digit area, single-digit hunt type, description (lazy),
+      // then 4 numbers (quota, first, second, third). Allow trailing space/EOL.
+      // Description sometimes has trailing semicolons or punctuation; we
+      // strip those when extracting.
+      const wgfdRowRe =
+        /(\d{3})\s+(\d)\s+([A-Z][A-Z\s,;()\-/]+?)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)(?=\s|$)/g;
+      const parsedRows: Array<{
+        area: string;
+        huntType: string;
+        description: string;
+        quota: number;
+        first: number;
+        second: number;
+        third: number;
+      }> = [];
+      let m: RegExpExecArray | null;
+      while ((m = wgfdRowRe.exec(fullText)) !== null) {
+        parsedRows.push({
+          area: m[1],
+          huntType: m[2],
+          description: m[3].trim().replace(/[;,]+$/, ""),
+          quota: parseInt(m[4], 10),
+          first: parseInt(m[5], 10),
+          second: parseInt(m[6], 10),
+          third: parseInt(m[7], 10),
+        });
+      }
+      result.parsedRecords = parsedRows.length;
+      // Quality score: % of rows where quota+first are both >0 (real data).
+      const realDataRows = parsedRows.filter((r) => r.quota > 0 || r.first > 0).length;
+      result.qualityScore = parsedRows.length > 0
+        ? Math.round((realDataRows / parsedRows.length) * 100)
+        : 0;
 
-      // Normalize. parsed.records is typed as the parser's record type; the
-      // normalizer accepts the same shape — cast through unknown to bypass
-      // strict overlap checking since the array types are nominally different
-      // but structurally compatible.
-      const normalized = normalizer.normalizeDrawOdds(
-        parsed.records as unknown as Parameters<typeof normalizer.normalizeDrawOdds>[0],
-        "WY",
-        "wgfd-pdf-seed",
-      );
+      // Touch unused imports so TS doesn't strip them (we keep them around
+      // for future per-state parser customization)
+      void drawParser;
+      void normalizer;
 
-      // Insert each record. Hunt unit gets auto-created with bare code as
-      // unit_name (enrichment is a follow-up step).
-      for (const rec of normalized.records as Array<Record<string, unknown>>) {
-        const rawUnit = (rec.unitCode as string) ?? "";
-        const unitCode = normalizer.normalizeUnitCode(rawUnit, "WY");
-        if (!unitCode) continue;
+      // Insert each parsed row directly.
+      for (const row of parsedRows) {
+        const unitCode = row.area;
+        const weaponType = HUNT_TYPE_TO_WEAPON[row.huntType] ?? null;
+        const drawRate = row.first > 0 ? row.quota / row.first : null;
+        const totalApplicants = row.first;
+        const totalTags = row.quota;
+        const rawData = {
+          parser: "wgfd-demand-report-inline",
+          area: row.area,
+          huntType: row.huntType,
+          description: row.description,
+          quota: row.quota,
+          firstChoiceApplicants: row.first,
+          secondChoiceApplicants: row.second,
+          thirdChoiceApplicants: row.third,
+        };
 
-        // Look up or create hunt_unit
+        // Look up or create hunt_unit for (WY, species, unit_code)
         let huntUnitId: string | null = null;
         const [existingUnit] = await db
           .select({ id: huntUnits.id })
@@ -273,13 +323,12 @@ async function handlePost(request: NextRequest) {
                 stateId: wyState.id,
                 speciesId,
                 unitCode,
-                unitName: unitCode, // bare code; enrichment is separate step
+                unitName: `Hunt Area ${unitCode} (WGFD ${target.label})`,
               })
               .returning({ id: huntUnits.id });
             huntUnitId = created.id;
             result.huntUnitsCreated++;
           } catch (huntErr) {
-            // Could be a race or a constraint; recover with a SELECT
             const [reread] = await db
               .select({ id: huntUnits.id })
               .from(huntUnits)
@@ -299,7 +348,7 @@ async function handlePost(request: NextRequest) {
           }
         }
 
-        // Try inserting the draw_odds row
+        // Insert the draw_odds row
         try {
           const insertResult = await db
             .insert(drawOdds)
@@ -307,38 +356,28 @@ async function handlePost(request: NextRequest) {
               stateId: wyState.id,
               speciesId,
               huntUnitId,
-              year: (rec.year as number) ?? TARGET_YEAR,
-              residentType: (rec.residentType as string) ?? "nonresident",
-              weaponType: (rec.weaponType as string) ?? null,
-              choiceRank: (rec.choiceRank as number) ?? null,
-              totalApplicants: (rec.totalApplicants as number) ?? null,
-              totalTags: (rec.totalTags as number) ?? null,
-              minPointsDrawn: (rec.minPointsDrawn as number) ?? null,
-              maxPointsDrawn: (rec.maxPointsDrawn as number) ?? null,
-              avgPointsDrawn: (rec.avgPointsDrawn as number) ?? null,
-              drawRate: (rec.drawRate as number) ?? null,
+              year: TARGET_YEAR,
+              residentType: "nonresident",
+              weaponType,
+              choiceRank: 1, // 1st-choice draw odds approximation
+              totalApplicants,
+              totalTags,
+              drawRate,
               sourceId,
-              rawData: (rec.rawRow as Record<string, unknown>) ?? {},
+              rawData,
             })
             .onConflictDoNothing();
-          // drizzle's onConflictDoNothing doesn't give us a clean "did insert"
-          // signal across all drivers, so we approximate: assume insert succeeded
-          // (most rows are first-time; subsequent runs will be conflict-skipped
-          // and the total counts will still be useful per-run).
           const rowsAffected =
             (insertResult as unknown as { rowCount?: number }).rowCount ?? 1;
-          if (rowsAffected > 0) {
-            result.inserted++;
-          } else {
-            result.conflictsSkipped++;
-          }
+          if (rowsAffected > 0) result.inserted++;
+          else result.conflictsSkipped++;
         } catch (insertErr) {
           const msg =
             insertErr instanceof Error ? insertErr.message : String(insertErr);
-          if (!msg.includes("duplicate") && !msg.includes("conflict")) {
-            result.errors.push(`Insert err on unit ${unitCode}: ${msg}`);
-          } else {
+          if (msg.includes("duplicate") || msg.includes("conflict")) {
             result.conflictsSkipped++;
+          } else {
+            result.errors.push(`Insert err on unit ${unitCode}: ${msg}`);
           }
         }
       }
