@@ -98,6 +98,7 @@ async function handlePost(request: NextRequest) {
 
   const url = new URL(request.url);
   const speciesFilter = url.searchParams.get("species");
+  const debug = url.searchParams.get("debug") === "1";
   const targets = speciesFilter
     ? WGFD_PDFS.filter((p) => p.speciesSlug === speciesFilter)
     : WGFD_PDFS;
@@ -206,6 +207,15 @@ async function handlePost(request: NextRequest) {
       const pdf = await getDocumentProxy(new Uint8Array(buf));
       const { text } = await extractText(pdf, { mergePages: true });
       const fullText = Array.isArray(text) ? text.join("\n") : (text as string);
+
+      // In debug mode, attach a sample of extracted text so we can see what
+      // format WGFD is publishing without grinding through more deploys.
+      if (debug) {
+        (result as PerPdfResult & { textSample?: string; textLength?: number }).textSample =
+          fullText.slice(0, 2500);
+        (result as PerPdfResult & { textSample?: string; textLength?: number }).textLength =
+          fullText.length;
+      }
 
       // Parse table
       const parsed = await drawParser.parse(fullText, {
