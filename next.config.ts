@@ -5,6 +5,13 @@ const nextConfig: NextConfig = {
     // Skip type checking during build — run `tsc --noEmit` separately in CI
     ignoreBuildErrors: true,
   },
+  // Server-only packages that should be loaded via Node require() at runtime
+  // instead of bundled by webpack. pdf-parse depends on pdfjs-dist which
+  // references browser globals (DOMMatrix, Path2D, ImageData); bundling it
+  // loses our polyfill ordering. Listing it here makes Next.js require() it
+  // at runtime so the polyfill applied in the route module is in effect when
+  // pdfjs-dist initializes.
+  serverExternalPackages: ["pdf-parse", "pdfjs-dist"],
   experimental: {
     // Enable server actions
     serverActions: {
