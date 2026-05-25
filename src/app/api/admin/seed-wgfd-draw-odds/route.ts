@@ -61,6 +61,22 @@ interface PerPdfResult {
 }
 
 export async function POST(request: NextRequest) {
+  try {
+    return await handlePost(request);
+  } catch (err) {
+    console.error("[admin:seed-wgfd] FATAL:", err);
+    return NextResponse.json(
+      {
+        ok: false,
+        fatalError: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack?.split("\n").slice(0, 8) : undefined,
+      },
+      { status: 500 },
+    );
+  }
+}
+
+async function handlePost(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret) {
