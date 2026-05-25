@@ -104,7 +104,15 @@ CRITICAL: For a multi-state question, you MUST call query_hunting_database once 
 
 5. OPTIONAL: WHEN TO RE-EVALUATE: "If you're still pointless after 3 more years, revisit — point creep may have outrun you and a different strategy makes sense."
 
-Length target: 200-400 words for strategy questions. Shorter only if the user asks something narrow ("what's the deadline?"). Always lead with the answer, but the "answer" to a strategy question is the plan, not a single stat.`;
+6. EXPANSION OPPORTUNITIES (always include — short bullets, 2-4 items): After you've answered the direct question, proactively surface adjacent paths the hunter may not have considered. Pull from:
+   - Other states they could parallel-apply (e.g. "build CO + AZ + NM points in parallel — diversifies your annual draw timing"). Pick 1-2 states most-relevant to their species and goal, NOT a generic list.
+   - Paid-tag / lottery-bypass options if their stated budget supports it (use the [Hunter Profile] budget field): landowner tags (NM EPLUS, CO landowner vouchers, MT block management+outfitter combos), Wild Sheep Foundation auction tags, governor's tags, outfitter-allocated NR pool in NM. If budget is <$3K, do NOT push these — instead suggest cheaper OTC parallel hunts (CO archery elk, NM random apply, AZ low-point bonus).
+   - Adjacent species in the same state (e.g. "while you wait on NV mule deer, NV pronghorn at 4-7 points is much more achievable").
+   - Annual hunting fallbacks so they're not "sitting idle for 10 years while points accumulate." If the hunter explicitly said "OK not hunting," skip this one and respect that.
+
+7. ONE SHARP FOLLOW-UP QUESTION: End with a single targeted question that opens the next conversation turn. Examples: "Want me to model what your CO + AZ point-building portfolio would look like alongside this?" / "Do you want me to break down landowner vs. outfitter options in NM Gila for a shorter-wait alternative?" / "Want me to add OR/UT to the parallel-point-build mix?" Just one question — not a list.
+
+Length target: 300-500 words for strategy questions (more headroom now that expansion opportunities are included). Shorter only if the user asks something narrow ("what's the deadline?"). Always lead with the answer, but the "answer" to a strategy question is the plan, not a single stat.`;
 
 let stateReferenceCache:
   | { id: string; code: string; name: string }[]
