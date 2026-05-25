@@ -228,7 +228,10 @@ async function handlePost(request: NextRequest) {
       // Hunt code decoding (CPW):
       //   EE001E1R = Elk (E) + Either-sex (E) + GMU 001 + Season E1 + Rifle (R)
       //   trailing letter: R=rifle, A=archery, M=muzzleloader, P=plains
-      const HUNT_CODE_RE = /\b([EDPOMB][A-Z]\d{3}[A-Z0-9]{1,3}[RAMPB])\b/;
+      // CPW uses different first letters per species: E=elk, D=deer,
+      // A=antelope/pronghorn, M=moose, B=bear, O=bighorn sheep, G=mountain
+      // goat. Broaden the first char class to any uppercase letter.
+      const HUNT_CODE_RE = /\b([A-Z]{2}\d{3}[A-Z0-9]{1,3}[RAMPB])\b/;
       const QUOTA_RE = /Total Quota Amount\s+(\d+)/;
       const DRAWN_OUT_RE =
         /Drawn Out At\s+(.+?)\s+# Drawn at Final Level/s;
