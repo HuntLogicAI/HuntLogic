@@ -145,15 +145,19 @@ async function handlePost(request: NextRequest) {
     sourceId = inserted.id;
   }
 
-  // Lazy-import the parser + pdf-parse (heavy deps; avoid loading on cold start
-  // unless this route is actually called)
+  // Lazy-import the parser + PDF library. We use `unpdf` instead of `pdf-parse`
+  // because pdf-parse v2 pulls in pdfjs-dist which expects browser globals
+  // (DOMMatrix) and a separate worker file (pdf.worker.mjs) — both of which
+  // are absent in Vercel's serverless runtime. unpdf is purpose-built for
+  // serverless: it bundles the polyfills and runs pdfjs synchronously without
+  // a separate worker.
   const { DrawOddsTableParser } = await import(
     "@/services/ingestion/parsers/draw-odds-parser"
   );
   const { StateNormalizer } = await import(
     "@/services/ingestion/normalizers/state-normalizer"
   );
-  const { PDFParse } = await import("pdf-parse");
+  const { extractText, getDocumentProxy } = await import("unpdf");
   const drawParser = new DrawOddsTableParser();
   const normalizer = new StateNormalizer();
 
@@ -198,12 +202,13 @@ async function handlePost(request: NextRequest) {
       const buf = await fetchRes.arrayBuffer();
       result.bytes = buf.byteLength;
 
-      // Extract text
-      const pdfParser = new PDFParse({ data: Buffer.from(buf) });
-      const textResult = await pdfParser.getText();
+      // Extract text via unpdf (serverless-safe)
+      const pdf = await getDocumentProxy(new Uint8Array(buf));
+      const { text } = await extractText(pdf, { mergePages: true });
+      const fullText = Array.isArray(text) ? text.join("\n") : (text as string);
 
       // Parse table
-      const parsed = await drawParser.parse(textResult.text, {
+      const parsed = await drawParser.parse(fullText, {
         state_code: "WY",
         species_slug: target.speciesSlug,
         year: TARGET_YEAR,
