@@ -685,7 +685,11 @@ async function runAgenticStream(
   for (let iteration = 0; iteration < 4; iteration++) {
     const stream = client.messages.stream({
       model: CHAT_MODEL,
-      max_tokens: 1500,
+      // 3500 fits a full strategic brief (5 sections at 200-400 words each)
+      // with headroom for clarifying questions. Streaming means latency is
+      // dominated by first-token time, not total output, so this cap is
+      // about completeness more than speed.
+      max_tokens: 3500,
       temperature: 0.7,
       system: CHAT_SYSTEM_PROMPT,
       tools,
