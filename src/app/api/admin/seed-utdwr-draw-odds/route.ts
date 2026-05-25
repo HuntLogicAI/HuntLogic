@@ -254,12 +254,14 @@ async function handlePost(request: NextRequest) {
         ROW_RE.lastIndex = 0;
         let rMatch: RegExpExecArray | null;
         while ((rMatch = ROW_RE.exec(block)) !== null) {
+          // Group indices: 1=res_pts, 2=res_apps, 3=res_bonus, 4=res_reg,
+          // 5=res_total, 6=nr_pts, 7=nr_apps, 8=nr_bonus, 9=nr_reg, 10=nr_total
           rows.push({
             points: parseInt(rMatch[1], 10),
             resApps: parseInt(rMatch[2], 10),
             resTotal: parseInt(rMatch[5], 10),
             nrApps: parseInt(rMatch[7], 10),
-            nrTotal: parseInt(rMatch[11], 10),
+            nrTotal: parseInt(rMatch[10], 10),
           });
         }
 
