@@ -189,7 +189,11 @@ async function handlePost(request: NextRequest) {
       const fullText = Array.isArray(text) ? text.join("\n") : (text as string);
 
       if (debug) {
-        result.textSample = fullText.slice(0, 2500);
+        // Dump a 20KB window starting at offset 50KB so we see the per-hunt-code
+        // section, not the statewide summary header. Adjust ?offset=N to scan
+        // different parts of large PDFs.
+        const dbgOffset = parseInt(url.searchParams.get("offset") || "50000", 10);
+        result.textSample = fullText.slice(dbgOffset, dbgOffset + 20000);
         result.textLength = fullText.length;
       }
 
