@@ -40,6 +40,11 @@ const PUBLIC_PREFIXES = [
   "/api/v1/map/",
   "/api/v1/ingestion/trigger",
   "/api/v1/ops/auth",
+  // Portfolio engine endpoint handles auth internally — either pulls from
+  // the signed-in user's pointHoldings OR accepts an explicit holdings array
+  // in the body. Listed here so the middleware doesn't bounce body-passed
+  // anonymous calls to /login.
+  "/api/v1/portfolio",
   "/_next",
   "/favicon",
 ];
