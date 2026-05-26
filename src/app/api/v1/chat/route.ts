@@ -677,6 +677,33 @@ async function runAgenticStream(
       },
     },
     {
+      name: "simulate_user_portfolio",
+      description:
+        "Run a multi-year Monte Carlo draw simulation for the hunter's current point portfolio. Returns per-year draw probability projections + portfolio-level summary. Use this when the hunter asks 'when will I draw?', 'should I keep applying?', or any multi-year strategy question that requires projecting probability over time. This is HuntLogic's signature personalized analysis — prefer it over generic chat responses for any question that involves draws across multiple years.",
+      input_schema: {
+        type: "object" as const,
+        properties: {
+          holdings: {
+            type: "array",
+            description:
+              "Array of point holdings. Each item: { stateCode (2-letter, uppercase), speciesSlug (lowercase underscored), points (integer), pointType ('preference'|'bonus'|'loyalty')? }. Pull from the [Hunter Profile] block in the user message when available; otherwise ask the user.",
+            items: { type: "object" as const },
+          },
+          priority: {
+            type: "string",
+            description:
+              "Hunter's goal: 'trophy' (only top-tier units, willing to wait), 'balanced' (mix), or 'annual_hunt' (prioritize drawing every year). Default 'balanced'.",
+            enum: ["trophy", "balanced", "annual_hunt"],
+          },
+          horizonYears: {
+            type: "integer",
+            description: "Years to project forward. Default 10.",
+          },
+        },
+        required: ["holdings"],
+      },
+    },
+    {
       type: "web_search_20250305" as const,
       name: "web_search",
       max_uses: 2,
@@ -734,6 +761,18 @@ async function runAgenticStream(
           tool_use_id: block.id,
           content: result,
         });
+      } else if (block.name === "simulate_user_portfolio") {
+        const args = block.input as {
+          holdings?: Array<{ stateCode?: string; speciesSlug?: string; points?: number; pointType?: string }>;
+          priority?: "trophy" | "balanced" | "annual_hunt";
+          horizonYears?: number;
+        };
+        const result = await executeSimulatePortfolio(args);
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: result,
+        });
       }
     }
 
@@ -744,6 +783,72 @@ async function runAgenticStream(
     }
 
     conversationMessages.push({ role: "user", content: toolResults });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tool executor: personalized portfolio simulation
+// ---------------------------------------------------------------------------
+async function executeSimulatePortfolio(args: {
+  holdings?: Array<{ stateCode?: string; speciesSlug?: string; points?: number; pointType?: string }>;
+  priority?: "trophy" | "balanced" | "annual_hunt";
+  horizonYears?: number;
+}): Promise<string> {
+  try {
+    const { simulatePortfolio } = await import("@/lib/portfolio/engine");
+    const validHoldings = (args.holdings ?? [])
+      .filter((h) => h.stateCode && h.speciesSlug && typeof h.points === "number")
+      .map((h) => ({
+        stateCode: String(h.stateCode).toUpperCase(),
+        speciesSlug: String(h.speciesSlug).toLowerCase(),
+        points: h.points!,
+        pointType: h.pointType as "preference" | "bonus" | "loyalty" | undefined,
+      }));
+    if (validHoldings.length === 0) {
+      return JSON.stringify({
+        error: "No valid holdings provided. Each holding needs stateCode (2-letter), speciesSlug (lowercase underscored), and points (integer).",
+      });
+    }
+    const result = await simulatePortfolio({
+      holdings: validHoldings,
+      goals: {
+        priority: args.priority ?? "balanced",
+        patienceYears: args.horizonYears ?? 10,
+      },
+      horizonYears: args.horizonYears ?? 10,
+    });
+    // Trim verbose projection arrays in the tool result to keep model context
+    // tight. Surface the summary + per-track expected draw years + key per-year
+    // probability snapshots (year 0, 3, 5, 10).
+    const trimmed = {
+      summary: result.summary,
+      goals: result.goals,
+      horizonYears: result.horizonYears,
+      tracks: result.tracks.map((t) => ({
+        stateCode: t.stateCode,
+        speciesSlug: t.speciesSlug,
+        drawSystem: t.drawSystem,
+        currentPoints: t.currentPoints,
+        expectedDrawYear: t.expectedDrawYear,
+        snapshots: [0, 3, 5, 10]
+          .filter((y) => y < t.projections.length)
+          .map((y) => ({
+            year: t.projections[y].year,
+            yearsOut: t.projections[y].yearsOut,
+            projectedPoints: t.projections[y].projectedPoints,
+            drawProbabilityPct: Math.round(t.projections[y].drawProbabilityPct * 10) / 10,
+            cumulativeDrawPct: Math.round(t.projections[y].cumulativeDrawPct * 10) / 10,
+            confidence: t.projections[y].confidence,
+          })),
+        recommendation: t.recommendation,
+      })),
+      disclaimers: result.disclaimers,
+    };
+    return JSON.stringify(trimmed);
+  } catch (err) {
+    return JSON.stringify({
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
