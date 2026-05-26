@@ -37,14 +37,14 @@ This doc is the kickoff handoff for the next session.
 | State | Rows | Hunt Areas | Status |
 |-------|------|-----------|--------|
 | WY | 500 | 186 | All 5 species (elk/mule_deer/pronghorn/bighorn_sheep/moose) ✓ |
-| CO | 1,217 | 177 | Elk + deer + moose ✓ (pronghorn = 0 records, code prefix mismatch follow-up) |
+| CO | 1,485 | ~290 | Elk + deer + pronghorn + moose ✓ (the earlier "0 pronghorn records" finding was a stale snapshot — the regex fix landed, pronghorn now has 592 rows) |
 | UT | 1,315 | 594 | Limited entry comprehensive ✓ (general-season deer = 2 records, different format follow-up) |
 | NM | 1,652 | 826 | All species via XLSX ✓ |
 | AZ | 284 | 148 | Elk + deer + pronghorn + javelina ✓ (sheep = 0 records, different format) |
 | NV | (existing) | 277 | Enriched + all species ✓ |
 | ID | 0 | 0 | Deferred — IDFG uses interactive Hunt Planner, not downloadable file |
 
-**Total: ~5,250 real agency draw-odds rows + ~2,008 hunt areas with real data.**
+**Total: ~5,500 real agency draw-odds rows + ~2,200 hunt areas with real data.**
 
 **NV hunt-unit enrichment:**
 - 277 NV hunt units enriched with descriptive names ("Area 10 — Ruby Mountains (south)" instead of bare "061")
