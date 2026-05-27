@@ -28,6 +28,8 @@ export interface AgencyDataForTrack {
   totalApplicants: number | null;
   /** Min points level that drew (preference / hybrid systems) */
   drawnAtMinPoints: number | null;
+  /** Published average draw rate (0.0 to 1.0) — best anchor for squared-bonus */
+  drawRate: number | null;
   /** Year-over-year point-creep rate (e.g., 0.4 = 0.4 pts/yr increase in cutoff) */
   observedPointCreepRate: number;
   /** Source label for the basis explanation */
@@ -38,6 +40,7 @@ const DEFAULT_AGENCY_DATA: AgencyDataForTrack = {
   quota: null,
   totalApplicants: null,
   drawnAtMinPoints: null,
+  drawRate: null,
   // 0.4 pts/yr is a reasonable default for moderately competitive western units.
   // Premium units run 0.6-1.0+; OTC-adjacent run 0.0-0.2.
   observedPointCreepRate: 0.4,
@@ -73,6 +76,7 @@ export function projectTrack(
       userPoints: pointsByYear,
       quota: agency.quota,
       totalApplicants: agency.totalApplicants,
+      drawRate: agency.drawRate,
       // Project the cutoff drifting upward over time
       drawnAtMinPoints: agency.drawnAtMinPoints != null
         ? agency.drawnAtMinPoints + agency.observedPointCreepRate * i

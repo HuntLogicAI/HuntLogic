@@ -55,22 +55,48 @@ describe("preferenceDrawProbability", () => {
   });
 });
 
-describe("squaredBonusDrawProbability", () => {
+describe("squaredBonusDrawProbability (NV/UT lottery)", () => {
   it("returns higher probability with more points (other things equal)", () => {
     const p5 = squaredBonusDrawProbability(5, 100, 5000);
     const p10 = squaredBonusDrawProbability(10, 100, 5000);
     expect(p10).toBeGreaterThan(p5);
   });
 
-  it("returns near-zero when user is well below observed minPoints", () => {
-    // Hunter at 3 points, but observed cutoff was 12 points
-    const p = squaredBonusDrawProbability(3, 100, 5000, 12);
-    expect(p).toBeLessThan(0.05);
+  it("returns NONZERO probability for 0-point hunters (lottery, not preference)", () => {
+    // The key behavior: even at 0 points, hunters have a real chance because
+    // they're still in the hat. observedDrawnAtMinPoints does NOT create a
+    // floor — it's just history, not a cutoff.
+    const p = squaredBonusDrawProbability(0, 100, 1000);
+    expect(p).toBeGreaterThan(0);
+    expect(p).toBeGreaterThan(0.0005); // at least the global minimum
   });
 
-  it("returns reasonable probability when at observed minPoints", () => {
-    const p = squaredBonusDrawProbability(12, 100, 5000, 12);
-    expect(p).toBeGreaterThan(0.01);
+  it("a 0-point hunter still has odds even if last year's min was 12", () => {
+    // CRUCIAL: this would be a near-zero result in a preference system, but
+    // in a lottery the 0-point hunter has 1 name in the hat — they CAN draw.
+    const p = squaredBonusDrawProbability(0, 100, 1000, 12);
+    expect(p).toBeGreaterThan(0.0005);
+  });
+
+  it("anchors to published drawRate when provided", () => {
+    // Avg applicant has 17 entries (4² + 1). User at 7 has 50 entries.
+    // Expected ratio: 50/17 ≈ 2.94x the avg drawRate.
+    const avgDrawRate = 0.05; // 5% avg
+    const p = squaredBonusDrawProbability(7, 100, 1000, null, avgDrawRate);
+    // Should be roughly avgDrawRate × (50/17) ≈ 0.147 (14.7%)
+    expect(p).toBeGreaterThan(0.1);
+    expect(p).toBeLessThan(0.2);
+  });
+
+  it("scales linearly with entry ratio when anchored to drawRate", () => {
+    const avg = 0.05;
+    const p0 = squaredBonusDrawProbability(0, 100, 1000, null, avg);
+    const p7 = squaredBonusDrawProbability(7, 100, 1000, null, avg);
+    const p15 = squaredBonusDrawProbability(15, 100, 1000, null, avg);
+    // Entries: 1, 50, 226. Ratios vs mean (17): 0.059, 2.94, 13.3
+    // So p7 should be ~50x p0; p15 should be ~226x p0
+    expect(p7 / p0).toBeGreaterThan(40);
+    expect(p15 / p0).toBeGreaterThan(100);
   });
 
   it("handles zero quota gracefully", () => {
@@ -137,7 +163,8 @@ describe("computeDrawProbability", () => {
     });
     expect(result.system).toBe("squared_bonus");
     expect(result.probability).toBeGreaterThan(0);
-    expect(result.basis).toContain("squared bonus");
+    expect(result.basis).toContain("squared-bonus");
+    expect(result.basis).toContain("names in the hat");
   });
 
   it("returns NM random result point-independent", () => {

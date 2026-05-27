@@ -63,49 +63,79 @@ export function preferenceDrawProbability(
 }
 
 /**
- * Squared-bonus system (UT, NV): your entries in the draw are (points² + 1).
- * P(draw) ≈ user_entries / total_entries.
+ * Squared-bonus "names in a hat" lottery (NV, UT).
  *
- * Inputs:
- *   - userPoints
- *   - totalApplicantPoints: array of all applicants' point counts (or aggregate stats)
- *   - quota: total tags available
+ * IMPORTANT: this is NOT a preference system. It's a true lottery where each
+ * point gives you an additional "name" in the hat:
+ *   - 0 points → 1 entry  (you're still in the draw)
+ *   - 1 point  → 2 entries
+ *   - 7 points → 50 entries
+ *   - 15 points → 226 entries
  *
- * If we don't have full applicant distribution, we approximate from observed
- * draw rate at the hunter's point level.
+ * Tags are drawn at random from the full pool. A 0-point hunter has nonzero
+ * odds — they DO draw occasionally in NV. There is no "minimum points to
+ * draw" floor in the way a preference system has it; minPointsDrawn from the
+ * agency data tells us what happened to win one year, not a hard cutoff.
+ *
+ * Math:
+ *   user_entries = points² + 1
+ *   total_pool_entries = sum of (apps_at_point_n × (n² + 1)) across all n
+ *   P(user wins one tag) = user_entries / total_pool_entries
+ *   P(user wins at least one of `quota` tags) ≈ 1 - (1 - p)^quota
+ *     for small p this collapses to ≈ p × quota
+ *
+ * Because we don't currently store the per-point applicant distribution, we
+ * approximate the total pool entries from observed totalApplicants and an
+ * assumed mean-entries-per-applicant. The assumed mean is the calibration
+ * knob — currently set to match observed published draw rates against the
+ * average applicant.
+ *
+ * If a published drawRate is provided, we anchor to it directly: drawRate is
+ * the average applicant's chance of drawing, so the user's chance scales as
+ * (user_entries / mean_entries).
+ *
+ * UT note: UT layers a 50% max-point-pool on top of the squared lottery
+ * (top point holders get first crack at half the tags). That's not modeled
+ * separately here — UT projections will slightly under-state odds for
+ * top-point holders and slightly over-state odds for mid-tier holders.
  */
+const ASSUMED_MEAN_APPLICANT_POINTS = 4;
+const ASSUMED_MEAN_ENTRIES = ASSUMED_MEAN_APPLICANT_POINTS * ASSUMED_MEAN_APPLICANT_POINTS + 1; // 17
+
 export function squaredBonusDrawProbability(
   userPoints: number,
   quota: number | null,
   observedTotalApplicants: number | null,
-  observedDrawnAtMinPoints: number | null = null,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _observedDrawnAtMinPoints: number | null = null,
+  observedDrawRate: number | null = null,
 ): number {
-  if (quota == null || quota <= 0) return 0.01;
+  if (quota == null || quota <= 0) return 0.001;
 
-  // If we have observed "min points drawn", use that as a hard floor signal
-  if (observedDrawnAtMinPoints != null && userPoints < observedDrawnAtMinPoints) {
-    // User is below the observed threshold — odds are extremely low
-    const gap = observedDrawnAtMinPoints - userPoints;
-    return Math.max(0.005, 0.05 * Math.exp(-0.4 * gap));
-  }
-
-  if (observedTotalApplicants == null || observedTotalApplicants <= 0) {
-    // Fall back to simple ratio with synthetic applicant pool assumption
-    // (rough heuristic: assume 50 applicants per quota tag with avg 4 points)
-    const syntheticTotal = quota * 50;
-    const userEntries = userPoints * userPoints + 1;
-    const avgEntries = 4 * 4 + 1; // 17 entries for the synthetic-avg 4-point hunter
-    const estimatedTotalEntries = syntheticTotal * avgEntries;
-    return Math.min(0.95, (userEntries * quota) / estimatedTotalEntries);
-  }
-
-  // We have a real applicant count. Compute user's share of squared-entry pool.
-  // Assume applicant point distribution is roughly geometric with mean ~5pts
-  // (this is a coarse approximation — actual NDOW/UTDWR data could refine this).
   const userEntries = userPoints * userPoints + 1;
-  const meanEntries = 5 * 5 + 1; // 26 entries for the average applicant
-  const totalPoolEntries = observedTotalApplicants * meanEntries;
-  return Math.min(0.95, (userEntries * quota) / totalPoolEntries);
+
+  // Best path: published drawRate anchors us to the realized average.
+  // user's P(draw) ≈ drawRate × (user_entries / mean_entries)
+  if (observedDrawRate != null && observedDrawRate > 0) {
+    const scaled = observedDrawRate * (userEntries / ASSUMED_MEAN_ENTRIES);
+    return Math.max(0.001, Math.min(0.95, scaled));
+  }
+
+  // Next-best: total applicants. Build the pool from observed apps × mean.
+  if (observedTotalApplicants != null && observedTotalApplicants > 0) {
+    const totalPoolEntries = observedTotalApplicants * ASSUMED_MEAN_ENTRIES;
+    const pPerTag = userEntries / totalPoolEntries;
+    // P(at least one of quota tags) ≈ 1 - (1-p)^quota
+    const pAtLeastOne = 1 - Math.pow(1 - pPerTag, quota);
+    return Math.max(0.001, Math.min(0.95, pAtLeastOne));
+  }
+
+  // Fallback with no observed data: synthetic 50-apps-per-tag pool.
+  const syntheticApplicants = quota * 50;
+  const syntheticPool = syntheticApplicants * ASSUMED_MEAN_ENTRIES;
+  const pPerTag = userEntries / syntheticPool;
+  const pAtLeastOne = 1 - Math.pow(1 - pPerTag, quota);
+  return Math.max(0.001, Math.min(0.95, pAtLeastOne));
 }
 
 /**
@@ -171,6 +201,8 @@ export interface DrawProbabilityInput {
   quota?: number | null;
   totalApplicants?: number | null;
   drawnAtMinPoints?: number | null;
+  /** Published average draw rate (0.0 to 1.0) — best anchor for squared-bonus */
+  drawRate?: number | null;
 }
 
 export interface DrawProbabilityResult {
@@ -195,16 +227,19 @@ export function computeDrawProbability(input: DrawProbabilityInput): DrawProbabi
       confidence = input.drawnAtMinPoints != null ? "high" : "low";
       break;
 
-    case "squared_bonus":
+    case "squared_bonus": {
       probability = squaredBonusDrawProbability(
         input.userPoints,
         input.quota ?? null,
         input.totalApplicants ?? null,
         input.drawnAtMinPoints ?? null,
+        input.drawRate ?? null,
       );
-      basis = `${input.stateCode} squared bonus: you have ${input.userPoints}² + 1 = ${input.userPoints * input.userPoints + 1} entries.`;
-      confidence = input.totalApplicants != null ? "high" : "medium";
+      const entries = input.userPoints * input.userPoints + 1;
+      basis = `${input.stateCode} squared-bonus lottery ("names in the hat"): you have ${input.userPoints}² + 1 = ${entries} entries in the random draw. ${input.drawRate != null ? `Anchored to published draw rate ${(input.drawRate * 100).toFixed(1)}%.` : input.totalApplicants != null ? `Pool size: ${input.totalApplicants} applicants.` : "No applicant data — using synthetic pool."}`;
+      confidence = input.drawRate != null ? "high" : input.totalApplicants != null ? "medium" : "low";
       break;
+    }
 
     case "bonus_random":
       probability = bonusRandomDrawProbability(
