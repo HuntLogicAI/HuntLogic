@@ -10,6 +10,7 @@ const baseAgency: AgencyDataForTrack = {
   quota: 50,
   totalApplicants: 2000,
   drawnAtMinPoints: 10,
+  drawRate: 0.05,
   observedPointCreepRate: 0.4,
   sourceLabel: "test data",
 };
@@ -153,7 +154,8 @@ describe("projectTrack", () => {
     };
     const track = projectTrack(holding);
     expect(track.projections.length).toBe(11);
-    expect(track.projections[0].confidence).toBe("medium"); // bonus_random fallback
+    // No drawRate or totalApplicants → low confidence (synthetic fallback)
+    expect(track.projections[0].confidence).toBe("low");
   });
 });
 

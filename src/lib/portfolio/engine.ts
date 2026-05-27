@@ -158,6 +158,7 @@ async function fetchAgencyDataForTrack(
     quota: representative.totalTags ?? null,
     totalApplicants: representative.totalApplicants ?? null,
     drawnAtMinPoints: representative.minPointsDrawn ?? null,
+    drawRate: representative.drawRate ?? null,
     observedPointCreepRate: 0.4, // TODO: derive from year-over-year data once we have multi-year history
     sourceLabel: `${holding.stateCode} draw_odds year ${representative.year}${unitLabel}`,
   };
@@ -168,6 +169,7 @@ function defaultAgencyData(reason: string): AgencyDataForTrack {
     quota: null,
     totalApplicants: null,
     drawnAtMinPoints: null,
+    drawRate: null,
     observedPointCreepRate: 0.4,
     sourceLabel: `generic default (${reason})`,
   };
