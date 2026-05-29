@@ -15,6 +15,7 @@ import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema/users";
 import { HuntLogicDrizzleAdapter } from "./adapter";
 import { config } from "@/lib/config";
+import { isEmailAllowed } from "./allowlist";
 
 // =============================================================================
 // Type augmentation for Auth.js
@@ -152,6 +153,13 @@ export const authConfig: NextAuthConfig = {
      */
     async signIn({ user, account }) {
       if (!user.email) return false;
+
+      // Private-beta gate. When ALLOWED_EMAILS is set, only listed emails
+      // (plus ADMIN_EMAILS) may sign in. Empty allowlist = open to all.
+      if (!isEmailAllowed(user.email, process.env.ALLOWED_EMAILS, process.env.ADMIN_EMAILS)) {
+        console.warn(`[auth] Blocked sign-in — not on beta allowlist: ${user.email}`);
+        return false;
+      }
 
       try {
         // Check if user exists in our DB
