@@ -106,7 +106,6 @@ export function squaredBonusDrawProbability(
   userPoints: number,
   quota: number | null,
   observedTotalApplicants: number | null,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _observedDrawnAtMinPoints: number | null = null,
   observedDrawRate: number | null = null,
 ): number {
