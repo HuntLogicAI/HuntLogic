@@ -94,6 +94,18 @@ export const config = {
     apiUrl: optionalEnv("FORECASTING_API_URL", "http://localhost:8000"),
   },
 
+  messaging: {
+    telegram: {
+      // Bot API token from @BotFather.
+      botToken: optionalEnv("TELEGRAM_BOT_TOKEN"),
+      // Public bot handle, e.g. "@HuntLogicBot". Also exposed at app.telegramBot.
+      botHandle: optionalEnv("TELEGRAM_BOT_HANDLE", "@TeddyLogicBot"),
+      // Secret passed to setWebhook + echoed back in the
+      // X-Telegram-Bot-Api-Secret-Token header on every inbound update.
+      webhookSecret: optionalEnv("TELEGRAM_WEBHOOK_SECRET"),
+    },
+  },
+
   stripe: {
     secretKey: () => requireEnv("STRIPE_SECRET_KEY"),
     publishableKey: optionalEnv("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY"),
@@ -107,6 +119,9 @@ export const config = {
     pushNotifications:
       optionalEnv("ENABLE_PUSH_NOTIFICATIONS", "false") === "true",
     mapFeatures: optionalEnv("ENABLE_MAP_FEATURES", "true") === "true",
+    // Telegram concierge channel ("Grizz in your pocket"). Off by default —
+    // gates the linking UI, the webhook, and the admin setup endpoint.
+    telegramBot: optionalEnv("ENABLE_TELEGRAM_BOT", "false") === "true",
   },
 } as const;
 
