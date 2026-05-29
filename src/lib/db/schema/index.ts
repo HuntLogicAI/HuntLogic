@@ -68,6 +68,16 @@ export {
   pushSubscriptionsRelations,
 } from "./push-subscriptions";
 
+// Messaging channels (Telegram / SMS / WhatsApp concierge)
+export {
+  messagingIdentities,
+  messagingLinkTokens,
+  messagingMessages,
+  messagingIdentitiesRelations,
+  messagingLinkTokensRelations,
+  messagingMessagesRelations,
+} from "./messaging";
+
 // Data sources domain
 export {
   dataSources,

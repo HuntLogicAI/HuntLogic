@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Bell, Globe, User, Shield, Download, Check, Link2, ChevronRight, Trash2 } from "lucide-react";
+import { Bell, Globe, User, Shield, Download, Check, Link2, ChevronRight, Trash2, Send } from "lucide-react";
 import { apiClient } from "@/lib/api/client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PushNotificationToggle } from "@/components/settings/PushNotificationToggle";
+import { ConnectTelegram } from "@/components/settings/ConnectTelegram";
 
 interface NotifPrefs {
   emailEnabled: boolean;
@@ -180,6 +181,11 @@ export default function SettingsPage() {
             <PushNotificationToggle />
           </div>
         </div>
+      </SettingsCard>
+
+      {/* Telegram concierge */}
+      <SettingsCard icon={Send} title="Concierge on Telegram">
+        <ConnectTelegram />
       </SettingsCard>
 
       {/* State Accounts */}
