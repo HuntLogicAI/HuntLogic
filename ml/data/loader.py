@@ -26,14 +26,29 @@ def load_point_history(
     species_slug: str,
     unit_code: str,
 ) -> list[dict]:
-    """Load historical min_points_drawn for a state+species+unit combination."""
+    """Load historical min_points_drawn for a state+species+unit combination.
+
+    Returns:
+        list of {year, min_points, effective_points, point_system_type}.
+
+    The forecaster should consume `effective_points` when projecting trends
+    across state lines — raw `min_points` is incomparable between
+    bonus / bonus_squared / pure_preference systems. Within a single
+    (state, species, unit) series the two are equivalent for pure_preference
+    states and proportional for bonus systems, so backward compatibility is
+    preserved for callers that still read `min_points`.
+    """
     try:
         conn = get_connection()
         cur = conn.cursor()
 
         cur.execute(
             """
-            SELECT do.year, do.min_points_drawn
+            SELECT
+                do.year,
+                do.min_points_drawn,
+                do.effective_points,
+                do.point_system_type
             FROM draw_odds do
             JOIN states s ON do.state_id = s.id
             JOIN species sp ON do.species_id = sp.id
@@ -52,7 +67,14 @@ def load_point_history(
         conn.close()
 
         return [
-            {"year": row[0], "min_points": row[1]}
+            {
+                "year": row[0],
+                "min_points": row[1],
+                # Fallback to raw min_points when effective_points hasn't been
+                # backfilled yet (pre-migration data).
+                "effective_points": row[2] if row[2] is not None else row[1],
+                "point_system_type": row[3] or "pure_preference",
+            }
             for row in rows
         ]
     except Exception as e:
@@ -129,7 +151,12 @@ def load_draw_history(
 
 
 def load_training_data():
-    """Load all draw odds data for bulk training."""
+    """Load all draw odds data for bulk training.
+
+    Includes the normalized point fields (effective_points, point_system_type)
+    so the model can either project all data onto a common axis or partition
+    training by point_system_type.
+    """
     try:
         import pandas as pd
 
@@ -143,6 +170,8 @@ def load_training_data():
                 do.total_applicants,
                 do.total_tags,
                 do.min_points_drawn,
+                do.effective_points,
+                do.point_system_type,
                 do.draw_rate,
                 do.resident_type,
                 do.weapon_type

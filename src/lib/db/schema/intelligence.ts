@@ -41,6 +41,13 @@ export const drawOdds = pgTable(
     maxPointsDrawn: integer("max_points_drawn"),
     avgPointsDrawn: real("avg_points_drawn"),
     drawRate: real("draw_rate"), // 0.0 to 1.0
+    // ----- Point-system normalization (added 2026-05) -----
+    // Categorizes the underlying point math so cross-state comparison is possible.
+    pointSystemType: text("point_system_type"), // 'pure_preference' | 'bonus' | 'bonus_squared' | 'weighted_preference' | 'random' | 'none'
+    // Normalized "effective preference-equivalent points" computed from
+    // minPointsDrawn under the point_system_type math. Lets the ML forecaster
+    // compare AZ bonus, NV bonus², UT 50/50, CO preference on one axis.
+    effectivePoints: real("effective_points"),
     sourceId: uuid("source_id").references(() => dataSources.id, {
       onDelete: "set null",
     }),

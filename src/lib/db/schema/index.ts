@@ -142,6 +142,26 @@ export {
 // Knowledge domain
 export { knowledgeChunks } from "./knowledge-chunks";
 
+// Regulation snapshots + delta tracking
+export {
+  regulationSnapshots,
+  regulationChanges,
+  regulationSnapshotsRelations,
+  regulationChangesRelations,
+} from "./regulation-snapshots";
+
+// Hunter knowledge domain (new-hunter mode + equipment-aware advice)
+export {
+  hunterEducationRequirements,
+  licenseTypes,
+  weaponRegulations,
+  publicLandParcels,
+  hunterEducationRequirementsRelations,
+  licenseTypesRelations,
+  weaponRegulationsRelations,
+  publicLandParcelsRelations,
+} from "./hunter-knowledge";
+
 // Concierge domain
 export {
   stateFeeSchedules,
